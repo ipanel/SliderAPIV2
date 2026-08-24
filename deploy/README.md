@@ -165,6 +165,21 @@ For unattended installation, set `AUTO_SETUP=true` before the first startup. In 
 
 The wizard writes `config.yaml` and `.installed` under `/app/data`. Persist that directory. After installation, changing only `.env` or selecting another Compose file is **not** a database migration.
 
+## Custom upstream URL policy
+
+Compose deployments use the same compatibility defaults as direct binary deployments: the URL allowlist is disabled, and self-hosted `http://` or private-network upstreams are accepted. The model sync and model probe endpoints use this same policy.
+
+For an Internet-facing hardened deployment, opt in to strict validation and list every permitted upstream hostname:
+
+```dotenv
+SECURITY_URL_ALLOWLIST_ENABLED=true
+SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false
+SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=false
+SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=api.openai.com,api.anthropic.com,your-upstream.example.com
+```
+
+Strict allowlist mode requires HTTPS. After changing these values, recreate the application container so the environment is reapplied.
+
 ## Upgrades and database safety
 
 Pin a release tag in production:
