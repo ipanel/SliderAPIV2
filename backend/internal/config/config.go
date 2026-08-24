@@ -1386,13 +1386,14 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 
 	cfg.RunMode = NormalizeRunMode(cfg.RunMode)
 	cfg.Database.Driver = cfg.Database.DriverName()
-	if cfg.Database.Driver == DatabaseDriverMySQL {
+	switch cfg.Database.Driver {
+	case DatabaseDriverMySQL:
 		sslMode, err := NormalizeDatabaseSSLMode(cfg.Database.SSLMode)
 		if err != nil {
 			return nil, err
 		}
 		cfg.Database.SSLMode = sslMode
-	} else if cfg.Database.Driver == DatabaseDriverSQLite {
+	case DatabaseDriverSQLite:
 		cfg.Database.Port = 0
 		cfg.Database.SSLMode = ""
 	}
