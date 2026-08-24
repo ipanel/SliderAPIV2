@@ -10364,29 +10364,140 @@ func reconcileCachedTokens(usage map[string]any) bool {
 
 const debugGatewayBodyDefaultFilename = "gateway_debug.log"
 
-// initDebugGatewayBodyFile 初始化网关调试日志文件。
-//
-//   - "1"/"true" 等布尔值 → 当前目录下 gateway_debug.log
-//   - 已有目录路径        → 该目录下 gateway_debug.log
-//   - 其他               → 视为完整文件路径
-func (s *GatewayService) initDebugGatewayBodyFile(path string) {
+func pathWithinDirectory(baseDir, path string) bool {
+	rel, err := filepath.Rel(baseDir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+// resolveExistingPath evaluates symlinks in the deepest existing ancestor and
+// appends any not-yet-existing suffix. EvalSymlinks also resolves Windows
+// junctions, so callers can compare the effective filesystem locations.
+func resolveExistingPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	missing := make([]string, 0, 2)
+	for {
+		if _, err := os.Lstat(path); err == nil {
+			resolved, evalErr := filepath.EvalSymlinks(path)
+			if evalErr != nil {
+				return "", evalErr
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", fmt.Errorf("no existing ancestor for %q", path)
+		}
+		missing = append(missing, filepath.Base(path))
+		path = parent
+	}
+}
+
+func resolveDebugGatewayBodyPath(rawPath string) (string, error) {
+	dataDir, err := filepath.Abs(config.ResolveDataDir())
+	if err != nil {
+		return "", fmt.Errorf("resolve gateway debug data directory: %w", err)
+	}
+	dataDir = filepath.Clean(dataDir)
+
+	path := strings.TrimSpace(rawPath)
 	if parseDebugEnvBool(path) {
 		path = debugGatewayBodyDefaultFilename
 	}
-
-	// 如果 path 指向一个已存在的目录，自动追加默认文件名
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
+	if !filepath.IsAbs(path) {
+		if !filepath.IsLocal(path) {
+			return "", fmt.Errorf("gateway debug log path %q is not a local path", rawPath)
+		}
+		path = filepath.Join(dataDir, path)
 	}
 
-	// 确保父目录存在
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve gateway debug log path %q: %w", rawPath, err)
+	}
+	path = filepath.Clean(path)
+	if !pathWithinDirectory(dataDir, path) {
+		return "", fmt.Errorf("gateway debug log path %q must stay within data directory %q", rawPath, dataDir)
+	}
+
+	// Preserve the existing behavior for a path naming an existing directory.
+	// os.Stat intentionally follows a directory symlink; its effective parent is
+	// checked below before the default filename is used.
+	//nolint:gosec // G703: the lexical path has already been constrained to dataDir.
+	if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect gateway debug log path %q: %w", rawPath, statErr)
+	}
+
+	// Never follow an existing final symlink to a file. Parent symlinks and
+	// junctions are handled by resolving the parent below.
+	//nolint:gosec // G703: the lexical path has already been constrained to dataDir.
+	if info, lstatErr := os.Lstat(path); lstatErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("gateway debug log path %q must not be a symlink", rawPath)
+		}
+	} else if !errors.Is(lstatErr, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect gateway debug log path %q: %w", rawPath, lstatErr)
+	}
+
+	realDataDir, err := resolveExistingPath(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve gateway debug data directory symlinks: %w", err)
+	}
+	realParent, err := resolveExistingPath(filepath.Dir(path))
+	if err != nil {
+		return "", fmt.Errorf("resolve gateway debug log parent symlinks: %w", err)
+	}
+	realPath := filepath.Join(realParent, filepath.Base(path))
+	if !pathWithinDirectory(realDataDir, realPath) {
+		return "", fmt.Errorf("gateway debug log path %q resolves outside data directory %q", rawPath, dataDir)
+	}
+
+	return path, nil
+}
+
+// initDebugGatewayBodyFile initializes the gateway debug log within the runtime data directory.
+//
+//   - "1"/"true" writes to gateway_debug.log in the data directory.
+//   - An existing directory receives a gateway_debug.log child file.
+//   - Any other value is treated as a file path within the data directory.
+func (s *GatewayService) initDebugGatewayBodyFile(rawPath string) {
+	path, err := resolveDebugGatewayBodyPath(rawPath)
+	if err != nil {
+		slog.Error("invalid gateway debug log path", "path", rawPath, "error", err)
+		return
+	}
+
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", err)
+		//nolint:gosec // G703: resolveDebugGatewayBodyPath constrains dir to the configured data directory.
+		if mkdirErr := os.MkdirAll(dir, 0755); mkdirErr != nil {
+			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", mkdirErr)
 			return
 		}
 	}
 
+	// Re-resolve after creating parents to catch a pre-existing symlink or
+	// junction at any newly materialized component. This is intentionally a
+	// best-effort, cross-platform check: a trusted local actor able to replace
+	// entries inside the data directory can still race this check and OpenFile.
+	// Fully closing that TOCTOU window requires platform-specific no-follow or
+	// directory-handle APIs, which are outside this debug-only path's threat model.
+	path, err = resolveDebugGatewayBodyPath(rawPath)
+	if err != nil {
+		slog.Error("invalid gateway debug log path after creating parent directory", "path", rawPath, "error", err)
+		return
+	}
+
+	//nolint:gosec // G703: path is checked lexically and through existing filesystem links immediately above.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		slog.Error("failed to open gateway debug log file", "path", path, "error", err)
@@ -10402,7 +10513,7 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 // 启用方式（环境变量）：
 //
 //	SUB2API_DEBUG_GATEWAY_BODY=1                          # 写入 gateway_debug.log
-//	SUB2API_DEBUG_GATEWAY_BODY=/tmp/gateway_debug.log     # 写入指定路径
+//	SUB2API_DEBUG_GATEWAY_BODY=logs/gateway_debug.log    # 写入数据目录内的指定相对路径
 //
 // tag: "CLIENT_ORIGINAL" 或 "UPSTREAM_FORWARD"
 func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header, body []byte, extra map[string]string) {

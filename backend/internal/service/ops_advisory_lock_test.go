@@ -25,10 +25,16 @@ func openOpsAdvisoryLockSQLiteDB(t *testing.T) *sql.DB {
 	}
 	db.SetMaxOpenConns(8)
 	if err := db.Ping(); err != nil {
-		_ = db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("ping sqlite: %v; close sqlite: %v", err, closeErr)
+		}
 		t.Fatalf("ping sqlite: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close sqlite: %v", err)
+		}
+	})
 	return db
 }
 
@@ -80,7 +86,14 @@ func TestTryAcquireDBAdvisoryLockPreservesMySQLBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sqlmock db: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close sqlmock database: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("mysql expectations: %v", err)
+		}
+	})
 
 	const lockID int64 = 42
 	const lockName = "ikik_api_ops_42"
@@ -92,6 +105,7 @@ func TestTryAcquireDBAdvisoryLockPreservesMySQLBehavior(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT RELEASE_LOCK(?)")).
 		WithArgs(lockName).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectClose()
 
 	release, ok := tryAcquireDBAdvisoryLock(context.Background(), db, lockID)
 	if !ok || release == nil {
@@ -100,7 +114,4 @@ func TestTryAcquireDBAdvisoryLockPreservesMySQLBehavior(t *testing.T) {
 	release()
 	release()
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("mysql expectations: %v", err)
-	}
 }

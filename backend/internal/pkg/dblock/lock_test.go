@@ -173,7 +173,10 @@ func TestAcquireNamedLockPreservesMySQLNamedLockBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sqlmock db: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		// Closing sqlmock without an ExpectClose reports a mock expectation error; this test validates only lock SQL.
+		_ = db.Close()
+	})
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT sqlite_version()")).
 		WillReturnError(errors.New("FUNCTION sqlite_version does not exist"))

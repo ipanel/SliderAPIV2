@@ -239,7 +239,10 @@ func (s *PricingService) startUpdateScheduler() {
 
 // checkAndUpdatePricing 检查并更新价格数据
 func (s *PricingService) checkAndUpdatePricing() error {
-	pricingFile := s.getPricingFilePath()
+	pricingFile, err := s.getPricingFilePath()
+	if err != nil {
+		return err
+	}
 
 	// 检查本地文件是否存在
 	if _, err := os.Stat(pricingFile); os.IsNotExist(err) {
@@ -318,7 +321,10 @@ func (s *PricingService) syncWithRemote() error {
 	}
 
 	// 没有哈希URL时，基于时间检查
-	pricingFile := s.getPricingFilePath()
+	pricingFile, err := s.getPricingFilePath()
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(pricingFile)
 	if err != nil {
 		return s.downloadPricingData()
@@ -376,7 +382,10 @@ func (s *PricingService) downloadPricingData() error {
 	}
 
 	// 保存到本地文件
-	pricingFile := s.getPricingFilePath()
+	pricingFile, err := s.getPricingFilePath()
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(pricingFile, body, 0644); err != nil {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save file: %v", err)
 	}
@@ -387,7 +396,10 @@ func (s *PricingService) downloadPricingData() error {
 	if remoteHash != "" {
 		syncHash = remoteHash
 	}
-	hashFile := s.getHashFilePath()
+	hashFile, err := s.getHashFilePath()
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(hashFile, []byte(syncHash+"\n"), 0644); err != nil {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save hash: %v", err)
 	}
@@ -545,7 +557,11 @@ func (s *PricingService) useFallbackPricing() error {
 		return fmt.Errorf("read fallback failed: %w", err)
 	}
 
-	pricingFile := s.getPricingFilePath()
+	pricingFile, err := s.getPricingFilePath()
+	if err != nil {
+		return err
+	}
+	//nolint:gosec // G703 checks all os.WriteFile args; pricingFile is confined to DataDir, while taint comes from the non-path data argument.
 	if err := os.WriteFile(pricingFile, data, 0644); err != nil {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to copy fallback: %v", err)
 	}
@@ -984,14 +1000,35 @@ func (s *PricingService) ForceUpdate() error {
 	return s.downloadPricingData()
 }
 
-// getPricingFilePath 获取价格文件路径
-func (s *PricingService) getPricingFilePath() string {
-	return filepath.Join(s.cfg.Pricing.DataDir, "model_pricing.json")
+// getPricingFilePath returns the validated local pricing data path.
+func (s *PricingService) getPricingFilePath() (string, error) {
+	return s.resolvePricingDataFilePath("model_pricing.json")
 }
 
-// getHashFilePath 获取哈希文件路径
-func (s *PricingService) getHashFilePath() string {
-	return filepath.Join(s.cfg.Pricing.DataDir, "model_pricing.sha256")
+// getHashFilePath returns the validated local pricing hash path.
+func (s *PricingService) getHashFilePath() (string, error) {
+	return s.resolvePricingDataFilePath("model_pricing.sha256")
+}
+
+func (s *PricingService) resolvePricingDataFilePath(filename string) (string, error) {
+	dataDir, err := filepath.Abs(s.cfg.Pricing.DataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve pricing data directory: %w", err)
+	}
+	dataDir = filepath.Clean(dataDir)
+	if !filepath.IsLocal(filename) || filepath.Base(filename) != filename {
+		return "", fmt.Errorf("invalid pricing data filename %q", filename)
+	}
+
+	path := filepath.Join(dataDir, filename)
+	rel, err := filepath.Rel(dataDir, path)
+	if err != nil {
+		return "", fmt.Errorf("validate pricing data path %q: %w", path, err)
+	}
+	if rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("pricing data path %q must stay within data directory %q", path, dataDir)
+	}
+	return path, nil
 }
 
 // isNumeric 检查字符串是否为纯数字

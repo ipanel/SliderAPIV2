@@ -121,7 +121,7 @@ func (d *SQLiteDumper) copyDatabase(ctx context.Context, otherPath string, resto
 	if err != nil {
 		return fmt.Errorf("acquire sqlite connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	return conn.Raw(func(driverConn any) error {
 		backupConn, ok := driverConn.(sqliteBackupDriverConn)
@@ -168,7 +168,7 @@ func validateSQLiteBackup(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var result string
 	if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {

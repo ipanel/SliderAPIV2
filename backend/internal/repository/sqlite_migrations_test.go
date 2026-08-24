@@ -74,7 +74,7 @@ func TestApplySQLiteMigrationsCreatesCurrentSchema(t *testing.T) {
 
 	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check")
 	require.NoError(t, err)
-	defer rows.Close()
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
 	require.False(t, rows.Next(), "foreign_key_check returned violations")
 	require.NoError(t, rows.Err())
 }
@@ -120,7 +120,7 @@ func TestApplySQLiteMigrationsAppliesCanonicalSeeds(t *testing.T) {
 		FROM ops_alert_rules
 		ORDER BY id`)
 	require.NoError(t, err)
-	defer rows.Close()
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
 	for _, expected := range expectedRules {
 		require.True(t, rows.Next())
 		var name, description string
@@ -244,7 +244,7 @@ func TestApplySQLiteMigrationsSkipsHistoricalDML(t *testing.T) {
 
 	rows, err := db.QueryContext(ctx, "SELECT id, value FROM historical_rows ORDER BY id")
 	require.NoError(t, err)
-	defer rows.Close()
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
 	require.True(t, rows.Next())
 	var id int
 	var value string
@@ -334,7 +334,7 @@ func requireSQLiteColumnExists(t *testing.T, db *sql.DB, table, column string) {
 	quoted := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
 	rows, err := db.QueryContext(context.Background(), "PRAGMA table_info("+quoted+")")
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { require.NoError(t, rows.Close()) }()
 
 	for rows.Next() {
 		var cid, notNull, primaryKey int

@@ -695,6 +695,21 @@ func TestEffectiveOAuthConfig_WhitespaceTriming(t *testing.T) {
 	}
 }
 
+func TestIsGeminiCLIClientID(t *testing.T) {
+	t.Setenv(GeminiCLIOAuthClientIDEnv, "test-gemini-cli-oauth-client-id")
+
+	if !IsGeminiCLIClientID("  test-gemini-cli-oauth-client-id  ") {
+		t.Fatal("configured Gemini CLI OAuth client ID should be recognized")
+	}
+	if IsGeminiCLIClientID("custom-client-id") {
+		t.Fatal("custom OAuth client ID must not be recognized as the Gemini CLI client")
+	}
+	t.Setenv(GeminiCLIOAuthClientIDEnv, "")
+	if IsGeminiCLIClientID("") {
+		t.Fatal("empty client IDs must not be recognized as the Gemini CLI client")
+	}
+}
+
 func TestEffectiveOAuthConfig_NoEnvSecret(t *testing.T) {
 	t.Setenv(GeminiCLIOAuthClientIDEnv, "test-gemini-cli-oauth-client-id")
 	t.Setenv(GeminiCLIOAuthClientSecretEnv, "")

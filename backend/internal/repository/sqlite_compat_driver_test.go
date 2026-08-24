@@ -97,7 +97,7 @@ func TestSQLiteCompatDriverRewritesStatements(t *testing.T) {
 
 	stmt, err := db.Prepare(`INSERT INTO counters (id, value, updated_at) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)`)
 	require.NoError(t, err)
-	defer stmt.Close()
+	t.Cleanup(func() { require.NoError(t, stmt.Close()) })
 	_, err = stmt.Exec(1, "updated")
 	require.NoError(t, err)
 

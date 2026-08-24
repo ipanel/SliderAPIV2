@@ -287,13 +287,11 @@ func (h *UserAccountHandler) ApplyCarpool(c *gin.Context) {
 		"pool_id": poolID,
 		"note":    req.Note,
 	}, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
-		item, err := h.carpoolService.Apply(ctx, subject.UserID, poolID, service.ApplyCarpoolPoolRequest{
+		// Applying by pool ID is intentionally unavailable while the public hall is hidden.
+		_, err := h.carpoolService.Apply(ctx, subject.UserID, poolID, service.ApplyCarpoolPoolRequest{
 			Note: strings.TrimSpace(req.Note),
 		})
-		if err != nil {
-			return nil, err
-		}
-		return dto.CarpoolJoinRequestFromService(item), nil
+		return nil, err
 	})
 }
 

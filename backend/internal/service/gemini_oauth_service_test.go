@@ -595,7 +595,8 @@ func TestGeminiOAuthService_BuildAccountCredentials(t *testing.T) {
 // =====================
 
 func TestGeminiOAuthService_GetOAuthConfig(t *testing.T) {
-	t.Parallel()
+	// This test verifies matching against the deployment-provided Gemini CLI client ID.
+	t.Setenv(geminicli.GeminiCLIOAuthClientIDEnv, "test-gemini-cli-oauth-client-id")
 
 	tests := []struct {
 		name        string
@@ -638,7 +639,7 @@ func TestGeminiOAuthService_GetOAuthConfig(t *testing.T) {
 			cfg: &config.Config{
 				Gemini: config.GeminiConfig{
 					OAuth: config.GeminiOAuthConfig{
-						ClientID:     geminicli.GeminiCLIOAuthClientID,
+						ClientID:     "test-gemini-cli-oauth-client-id",
 						ClientSecret: "some-secret",
 					},
 				},

@@ -3,16 +3,22 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/require"
 	dbent "ikik-api/ent"
 	"ikik-api/ent/authidentity"
 	"ikik-api/ent/identityadoptiondecision"
@@ -21,9 +27,6 @@ import (
 	"ikik-api/internal/config"
 	servermiddleware "ikik-api/internal/server/middleware"
 	"ikik-api/internal/service"
-	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/stretchr/testify/require"
 )
 
 func TestOIDCSyntheticEmailStableAndDistinct(t *testing.T) {
@@ -130,6 +133,122 @@ func buildRSAJWK(kid string, pub *rsa.PublicKey) oidcJWK {
 		Alg: "RS256",
 		N:   n,
 		E:   e,
+	}
+}
+
+func TestOIDCJWKPublicKeyECValidCurves(t *testing.T) {
+	tests := []struct {
+		name  string
+		curve elliptic.Curve
+		crv   string
+	}{
+		{name: "P-256", curve: elliptic.P256(), crv: "P-256"},
+		{name: "P-384", curve: elliptic.P384(), crv: "P-384"},
+		{name: "P-521", curve: elliptic.P521(), crv: "P-521"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			privateKey, err := ecdsa.GenerateKey(tt.curve, rand.Reader)
+			require.NoError(t, err)
+
+			parsed, err := buildECJWK(tt.crv, &privateKey.PublicKey).publicKey()
+			require.NoError(t, err)
+
+			publicKey, ok := parsed.(*ecdsa.PublicKey)
+			require.True(t, ok)
+			require.Equal(t, tt.curve.Params().Name, publicKey.Curve.Params().Name)
+			expectedBytes, bytesErr := privateKey.PublicKey.Bytes()
+			require.NoError(t, bytesErr)
+			actualBytes, bytesErr := publicKey.Bytes()
+			require.NoError(t, bytesErr)
+			require.Equal(t, expectedBytes, actualBytes)
+		})
+	}
+}
+
+func TestOIDCJWKPublicKeyECPreservesLeadingZeroCoordinate(t *testing.T) {
+	curve := elliptic.P256()
+	rawPrivateKey := make([]byte, 32)
+	rawPrivateKey[len(rawPrivateKey)-1] = 43
+	privateKey, err := ecdsa.ParseRawPrivateKey(curve, rawPrivateKey)
+	require.NoError(t, err)
+	publicKey := &privateKey.PublicKey
+	jwk := buildECJWK("P-256", publicKey)
+
+	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	require.NoError(t, err)
+	require.Len(t, yBytes, 32)
+	require.Zero(t, yBytes[0], "test fixture must retain the leading zero byte")
+
+	parsed, err := jwk.publicKey()
+	require.NoError(t, err)
+	parsedKey, ok := parsed.(*ecdsa.PublicKey)
+	require.True(t, ok)
+	expectedBytes, bytesErr := publicKey.Bytes()
+	require.NoError(t, bytesErr)
+	actualBytes, bytesErr := parsedKey.Bytes()
+	require.NoError(t, bytesErr)
+	require.Equal(t, expectedBytes, actualBytes)
+}
+
+func TestOIDCJWKPublicKeyECRejectsInvalidKeys(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	validJWK := buildECJWK("P-256", &privateKey.PublicKey)
+
+	t.Run("coordinate too short", func(t *testing.T) {
+		x, decodeErr := base64.RawURLEncoding.DecodeString(validJWK.X)
+		require.NoError(t, decodeErr)
+		require.Len(t, x, 32)
+
+		jwk := validJWK
+		jwk.X = base64.RawURLEncoding.EncodeToString(x[1:])
+		_, parseErr := jwk.publicKey()
+		require.ErrorContains(t, parseErr, "invalid ec coordinate size for P-256")
+	})
+
+	t.Run("coordinate too long", func(t *testing.T) {
+		y, decodeErr := base64.RawURLEncoding.DecodeString(validJWK.Y)
+		require.NoError(t, decodeErr)
+		require.Len(t, y, 32)
+
+		jwk := validJWK
+		jwk.Y = base64.RawURLEncoding.EncodeToString(append([]byte{0}, y...))
+		_, parseErr := jwk.publicKey()
+		require.ErrorContains(t, parseErr, "invalid ec coordinate size for P-256")
+	})
+
+	t.Run("point is not on curve", func(t *testing.T) {
+		jwk := validJWK
+		jwk.X = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+		jwk.Y = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+		_, parseErr := jwk.publicKey()
+		require.ErrorContains(t, parseErr, "parse ec public key")
+	})
+
+	t.Run("unsupported curve", func(t *testing.T) {
+		jwk := validJWK
+		jwk.Crv = "P-224"
+		_, parseErr := jwk.publicKey()
+		require.ErrorContains(t, parseErr, "unsupported ec curve: P-224")
+	})
+}
+
+func buildECJWK(crv string, pub *ecdsa.PublicKey) oidcJWK {
+	encoded, err := pub.Bytes()
+	if err != nil {
+		panic(fmt.Sprintf("encode EC public key: %v", err))
+	}
+	coordinateSize := (len(encoded) - 1) / 2
+	x := encoded[1 : 1+coordinateSize]
+	y := encoded[1+coordinateSize:]
+	return oidcJWK{
+		Kty: "EC",
+		Use: "sig",
+		Crv: crv,
+		X:   base64.RawURLEncoding.EncodeToString(x),
+		Y:   base64.RawURLEncoding.EncodeToString(y),
 	}
 }
 

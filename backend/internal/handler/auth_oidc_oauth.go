@@ -1117,41 +1117,60 @@ func (k oidcJWK) publicKey() (any, error) {
 		}
 		return &rsa.PublicKey{N: n, E: e}, nil
 	case "EC":
-		var curve elliptic.Curve
+		var (
+			curve          elliptic.Curve
+			coordinateSize int
+		)
 		switch strings.TrimSpace(k.Crv) {
 		case "P-256":
-			curve = elliptic.P256()
+			curve, coordinateSize = elliptic.P256(), 32
 		case "P-384":
-			curve = elliptic.P384()
+			curve, coordinateSize = elliptic.P384(), 48
 		case "P-521":
-			curve = elliptic.P521()
+			curve, coordinateSize = elliptic.P521(), 66
 		default:
 			return nil, fmt.Errorf("unsupported ec curve: %s", k.Crv)
 		}
-		x, err := decodeBase64URLBigInt(k.X)
+		x, err := decodeBase64URLBytes(k.X)
 		if err != nil {
 			return nil, fmt.Errorf("decode ec x: %w", err)
 		}
-		y, err := decodeBase64URLBigInt(k.Y)
+		y, err := decodeBase64URLBytes(k.Y)
 		if err != nil {
 			return nil, fmt.Errorf("decode ec y: %w", err)
 		}
-		if !curve.IsOnCurve(x, y) {
-			return nil, errors.New("ec point is not on curve")
+		if len(x) != coordinateSize || len(y) != coordinateSize {
+			return nil, fmt.Errorf("invalid ec coordinate size for %s", k.Crv)
 		}
-		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+		encoded := make([]byte, 1+2*coordinateSize)
+		encoded[0] = 4 // SEC 1 uncompressed-point marker.
+		copy(encoded[1:1+coordinateSize], x)
+		copy(encoded[1+coordinateSize:], y)
+		publicKey, err := ecdsa.ParseUncompressedPublicKey(curve, encoded)
+		if err != nil {
+			return nil, fmt.Errorf("parse ec public key: %w", err)
+		}
+		return publicKey, nil
 	default:
 		return nil, fmt.Errorf("unsupported jwk kty: %s", k.Kty)
 	}
 }
 
-func decodeBase64URLBigInt(raw string) (*big.Int, error) {
+func decodeBase64URLBytes(raw string) ([]byte, error) {
 	buf, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
 	if err != nil {
 		return nil, err
 	}
 	if len(buf) == 0 {
 		return nil, errors.New("empty value")
+	}
+	return buf, nil
+}
+
+func decodeBase64URLBigInt(raw string) (*big.Int, error) {
+	buf, err := decodeBase64URLBytes(raw)
+	if err != nil {
+		return nil, err
 	}
 	return new(big.Int).SetBytes(buf), nil
 }

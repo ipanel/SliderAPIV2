@@ -215,7 +215,11 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 		if err != nil {
 			return err
 		}
-		defer db.Close()
+		defer func() {
+			if err := db.Close(); err != nil {
+				logger.LegacyPrintf("setup", "failed to close SQLite test connection: %v", err)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := db.PingContext(ctx); err != nil {
@@ -228,7 +232,11 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to MySQL/MariaDB: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.LegacyPrintf("setup", "failed to close MySQL server test connection: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
@@ -247,7 +255,11 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 	if err != nil {
 		return err
 	}
-	defer targetDB.Close()
+	defer func() {
+		if err := targetDB.Close(); err != nil {
+			logger.LegacyPrintf("setup", "failed to close target database test connection: %v", err)
+		}
+	}()
 	if err := targetDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping target database failed: %w", err)
 	}
@@ -357,7 +369,11 @@ func initializeDatabase(cfg *SetupConfig) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.LegacyPrintf("setup", "failed to close initialized database connection: %v", err)
+		}
+	}()
 	migrationCtx, cancel := context.WithTimeout(context.Background(), cfg.migrationTimeout())
 	defer cancel()
 	return repository.InitializeDatabaseSchema(migrationCtx, db, dialectName)
@@ -379,7 +395,11 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 	if err != nil {
 		return false, "", err
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.LegacyPrintf("setup", "failed to close admin bootstrap database connection: %v", err)
+		}
+	}()
 
 	// Keep setup from hanging indefinitely on database failures.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

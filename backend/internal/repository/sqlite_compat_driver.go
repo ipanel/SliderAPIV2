@@ -277,18 +277,18 @@ func rewriteUpdateAliases(query string) string {
 		if !hasSQLWordAt(masked, match[0], "UPDATE") {
 			continue
 		}
-		out.WriteString(query[last:match[0]])
-		out.WriteString("UPDATE ")
-		out.WriteString(query[match[2]:match[3]])
-		out.WriteString(" AS ")
-		out.WriteString(query[match[4]:match[5]])
-		out.WriteString(" SET")
+		_, _ = out.WriteString(query[last:match[0]])
+		_, _ = out.WriteString("UPDATE ")
+		_, _ = out.WriteString(query[match[2]:match[3]])
+		_, _ = out.WriteString(" AS ")
+		_, _ = out.WriteString(query[match[4]:match[5]])
+		_, _ = out.WriteString(" SET")
 		last = match[1]
 	}
 	if last == 0 {
 		return query
 	}
-	out.WriteString(query[last:])
+	_, _ = out.WriteString(query[last:])
 	return out.String()
 }
 
@@ -301,8 +301,8 @@ func rewriteDuplicateKeyUpdate(query string) string {
 	var out strings.Builder
 	last := 0
 	for i, location := range locations {
-		out.WriteString(query[last:location[0]])
-		out.WriteString("ON CONFLICT DO UPDATE SET")
+		_, _ = out.WriteString(query[last:location[0]])
+		_, _ = out.WriteString("ON CONFLICT DO UPDATE SET")
 		segmentEnd := len(query)
 		if i+1 < len(locations) {
 			segmentEnd = locations[i+1][0]
@@ -311,11 +311,11 @@ func rewriteDuplicateKeyUpdate(query string) string {
 		suffix = replaceRegexpOutsideSQLLiteralsFunc(suffix, insertedValueRE, func(match string) string {
 			return "excluded." + insertedValueRE.FindStringSubmatch(match)[1]
 		})
-		out.WriteString(suffix)
+		_, _ = out.WriteString(suffix)
 		last = segmentEnd
 	}
 	if last < len(query) {
-		out.WriteString(query[last:])
+		_, _ = out.WriteString(query[last:])
 	}
 	return out.String()
 }
@@ -656,11 +656,11 @@ func replaceRegexpOutsideSQLLiteralsFunc(query string, expression *regexp.Regexp
 	var out strings.Builder
 	last := 0
 	for _, match := range matches {
-		out.WriteString(query[last:match[0]])
-		out.WriteString(replacement(query[match[0]:match[1]]))
+		_, _ = out.WriteString(query[last:match[0]])
+		_, _ = out.WriteString(replacement(query[match[0]:match[1]]))
 		last = match[1]
 	}
-	out.WriteString(query[last:])
+	_, _ = out.WriteString(query[last:])
 	return out.String()
 }
 
@@ -937,7 +937,7 @@ func sqliteConcat(_ *modernsqlite.FunctionContext, args []driver.Value) (driver.
 		if arg == nil {
 			return nil, nil
 		}
-		out.WriteString(valueString(arg))
+		_, _ = out.WriteString(valueString(arg))
 	}
 	return out.String(), nil
 }
@@ -1341,13 +1341,13 @@ func formatMySQLDate(value time.Time, format string) string {
 	var out strings.Builder
 	for i := 0; i < len(format); i++ {
 		if format[i] != '%' || i+1 >= len(format) {
-			out.WriteByte(format[i])
+			_ = out.WriteByte(format[i])
 			continue
 		}
 		i++
 		switch format[i] {
 		case '%':
-			out.WriteByte('%')
+			_ = out.WriteByte('%')
 		case 'Y':
 			fmt.Fprintf(&out, "%04d", value.Year())
 		case 'y':
@@ -1363,9 +1363,9 @@ func formatMySQLDate(value time.Time, format string) string {
 		case 'c':
 			fmt.Fprintf(&out, "%d", int(value.Month()))
 		case 'M':
-			out.WriteString(value.Month().String())
+			_, _ = out.WriteString(value.Month().String())
 		case 'b':
-			out.WriteString(value.Month().String()[:3])
+			_, _ = out.WriteString(value.Month().String()[:3])
 		case 'd':
 			fmt.Fprintf(&out, "%02d", value.Day())
 		case 'e':
@@ -1393,23 +1393,23 @@ func formatMySQLDate(value time.Time, format string) string {
 		case 'f':
 			fmt.Fprintf(&out, "%06d", value.Nanosecond()/1000)
 		case 'p':
-			out.WriteString(value.Format("PM"))
+			_, _ = out.WriteString(value.Format("PM"))
 		case 'W':
-			out.WriteString(value.Weekday().String())
+			_, _ = out.WriteString(value.Weekday().String())
 		case 'a':
-			out.WriteString(value.Weekday().String()[:3])
+			_, _ = out.WriteString(value.Weekday().String()[:3])
 		case 'j':
 			fmt.Fprintf(&out, "%03d", value.YearDay())
 		case 'w':
 			fmt.Fprintf(&out, "%d", int(value.Weekday()))
 		case 'T':
-			out.WriteString(value.Format("15:04:05"))
+			_, _ = out.WriteString(value.Format("15:04:05"))
 		case 'r':
-			out.WriteString(value.Format("03:04:05 PM"))
+			_, _ = out.WriteString(value.Format("03:04:05 PM"))
 		default:
-			out.WriteByte('%')
+			_ = out.WriteByte('%')
 			if unicode.IsPrint(rune(format[i])) {
-				out.WriteByte(format[i])
+				_ = out.WriteByte(format[i])
 			}
 		}
 	}

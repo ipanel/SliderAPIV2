@@ -363,7 +363,7 @@ func sqliteColumnExists(ctx context.Context, tx *sql.Tx, tableName, columnName s
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -381,7 +381,7 @@ func sqliteIntegrityCheck(ctx context.Context, db *sql.DB, pragma string) error 
 	if err != nil {
 		return fmt.Errorf("sqlite %s: %w", pragma, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var result string
 		if err := rows.Scan(&result); err != nil {
@@ -405,8 +405,8 @@ func splitSQLTopLevelComma(input string) []string {
 		case '\'':
 			if !inDouble && !inBacktick {
 				if inSingle && i+1 < len(input) && input[i+1] == '\'' {
-					buf.WriteByte(c)
-					buf.WriteByte(input[i+1])
+					_ = buf.WriteByte(c)
+					_ = buf.WriteByte(input[i+1])
 					i++
 					continue
 				}
@@ -435,7 +435,7 @@ func splitSQLTopLevelComma(input string) []string {
 				continue
 			}
 		}
-		buf.WriteByte(c)
+		_ = buf.WriteByte(c)
 	}
 	if rest := strings.TrimSpace(buf.String()); rest != "" {
 		parts = append(parts, rest)
@@ -457,7 +457,10 @@ func firstSQLIdentifier(input string) string {
 	end := 0
 	for end < len(input) {
 		c := input[end]
-		if !(c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+		if c != '_' && c != '$' &&
+			(c < 'a' || c > 'z') &&
+			(c < 'A' || c > 'Z') &&
+			(c < '0' || c > '9') {
 			break
 		}
 		end++

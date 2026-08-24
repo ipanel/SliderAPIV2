@@ -132,7 +132,7 @@ func TestBindAccountsToGroupSQLiteJSONArray(t *testing.T) {
 
 	rows, err := db.Query(`SELECT account_id, group_id, priority FROM account_groups ORDER BY account_id`)
 	require.NoError(t, err)
-	defer rows.Close()
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
 
 	var got [][3]int64
 	for rows.Next() {
