@@ -4,8 +4,11 @@ package repository
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +20,7 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	_ "github.com/go-sql-driver/mysql" // MySQL/MariaDB driver (blank import registers it)
+	"github.com/go-sql-driver/mysql"
 )
 
 // InitEnt 初始化 Ent ORM 客户端并返回客户端实例和底层的 *sql.DB。
@@ -119,14 +122,93 @@ func OpenSQLDatabase(cfg *config.DatabaseConfig) (*sql.DB, string, error) {
 		}
 		return db, dialect.SQLite, nil
 	case config.DatabaseDriverMySQL:
-		db, err := sql.Open("mysql", cfg.DSN())
+		mysqlConfig, err := buildMySQLConfig(cfg)
 		if err != nil {
-			return nil, "", fmt.Errorf("open mysql database: %w", err)
+			return nil, "", err
 		}
-		return db, dialect.MySQL, nil
+		connector, err := mysql.NewConnector(mysqlConfig)
+		if err != nil {
+			return nil, "", fmt.Errorf("create mysql connector: %w", err)
+		}
+		return sql.OpenDB(connector), dialect.MySQL, nil
 	default:
 		return nil, "", fmt.Errorf("unsupported database driver %q", cfg.Driver)
 	}
+}
+
+func buildMySQLConfig(cfg *config.DatabaseConfig) (*mysql.Config, error) {
+	mysqlConfig, err := mysql.ParseDSN(cfg.DSN())
+	if err != nil {
+		return nil, fmt.Errorf("parse mysql DSN: %w", err)
+	}
+
+	tlsConfig, err := buildMySQLTLSConfig(cfg.SSLMode, mysqlConfig.Addr)
+	if err != nil {
+		return nil, err
+	}
+	mysqlConfig.TLSConfig = ""
+	mysqlConfig.TLS = tlsConfig
+	mysqlConfig.AllowFallbackToPlaintext = false
+	return mysqlConfig, nil
+}
+
+func buildMySQLTLSConfig(sslMode, addr string) (*tls.Config, error) {
+	serverName := mysqlServerName(addr)
+
+	switch strings.ToLower(strings.TrimSpace(sslMode)) {
+	case "", "disable":
+		return nil, nil
+	case "require":
+		return &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         serverName,
+			InsecureSkipVerify: true, //nolint:gosec // require encrypts the connection but intentionally does not authenticate the server certificate.
+		}, nil
+	case "verify-full":
+		return &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: serverName,
+		}, nil
+	case "verify-ca":
+		return &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         serverName,
+			InsecureSkipVerify: true, //nolint:gosec // Certificate-chain verification is performed below without hostname verification.
+			VerifyConnection: func(state tls.ConnectionState) error {
+				return verifyMySQLCertificateChain(state, nil)
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported mysql sslmode %q (supported: disable, require, verify-ca, verify-full)", sslMode)
+	}
+}
+
+func mysqlServerName(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil {
+		return host
+	}
+	return addr
+}
+
+func verifyMySQLCertificateChain(state tls.ConnectionState, roots *x509.CertPool) error {
+	if len(state.PeerCertificates) == 0 {
+		return fmt.Errorf("verify mysql TLS certificate chain: server provided no certificates")
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, certificate := range state.PeerCertificates[1:] {
+		intermediates.AddCert(certificate)
+	}
+	_, err := state.PeerCertificates[0].Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	if err != nil {
+		return fmt.Errorf("verify mysql TLS certificate chain: %w", err)
+	}
+	return nil
 }
 
 // InitializeDatabaseSchema initializes the schema for setup-time database creation.

@@ -147,14 +147,14 @@ docker build -t ikik-api:local .
 
 ## Docker クイックデプロイ
 
-マルチアーキテクチャイメージ `ghcr.io/ipanel/sliderapiv2:latest` を取得し、管理対象の Compose 構成で ikik-api、MariaDB、Redis を起動する方法を推奨します。
+管理対象のデプロイでは、マルチアーキテクチャイメージ `ghcr.io/ipanel/sliderapiv2:latest` を取得し、デフォルトの SQLite + Redis 構成を起動します。
 
 ```bash
 mkdir -p sliderapiv2 && cd sliderapiv2
 curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
 ```
 
-本番環境では `.env` の `IKIK_API_IMAGE` を `ghcr.io/ipanel/sliderapiv2:vX.Y.Z` のようなバージョンタグに固定してください。アップグレード、外部データベース、OAuth 環境変数、404 エラーの調査については [deploy/README.md](deploy/README.md) を参照してください。
+SQLite のデータは `data/` ディレクトリに永続化されます。新規インストールではブラウザの初期設定ウィザードが開き、SQLite があらかじめ選択されています。オプションの MariaDB 同梱構成を使用する場合は、`curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --database mysql` を実行し、ウィザードで MySQL を選択してください。デフォルトの SQLite Compose 構成では MariaDB は起動しないため、その構成で MySQL を選択する場合は、アプリケーションコンテナから接続できる外部データベースが必要です。データベースドライバーや Compose ファイルを変更しても、既存データは自動移行されません。環境変数による無人初期化が必要な場合に限り、初回起動前に `AUTO_SETUP=true` を設定してください。本番環境では `.env` の `IKIK_API_IMAGE` を `ghcr.io/ipanel/sliderapiv2:vX.Y.Z` のようなリリースタグに固定してください。手動デプロイ、データベース選択、アップグレード、バックアップ、OAuth 環境変数、404 エラーの調査については [deploy/README.md](deploy/README.md) を参照してください。
 
 ## テスト
 

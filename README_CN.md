@@ -38,7 +38,7 @@ QQ 群：`146499741`
 - 内容审查与风控接入点，支持请求/响应审计。
 - 内置发布流程，支持标签构建、Docker 镜像、归档包和 GitHub Releases。
 - 前端控制台基于 Vue 3、TypeScript、Pinia、Vue Router、Tailwind CSS 和 Vite。
-- 后端服务基于 Go、Gin、Ent、MariaDB、Redis 和模块化服务边界。
+- 后端服务基于 Go、Gin、Ent、SQLite/MySQL、Redis 和模块化服务边界。
 
 ## 1.0.3 更新内容
 
@@ -50,10 +50,10 @@ QQ 群：`146499741`
 
 ## 技术栈
 
-- 后端：Go 1.27.0、Gin、Ent、MariaDB、Redis
+- 后端：Go 1.27.0、Gin、Ent、SQLite/MySQL 兼容数据库、Redis
 - 前端：Vue 3、TypeScript、Vite、Pinia、Tailwind CSS
 - 测试：Go test、Vitest、vue-tsc、ESLint
-- 部署：Docker 或源码构建，推荐外置 MariaDB 和 Redis
+- 部署：Docker 或源码构建；默认 SQLite + Redis，可选 MariaDB
 
 ## 仓库结构
 
@@ -73,7 +73,7 @@ QQ 群：`146499741`
 - Go 1.27.0
 - Node.js 20+
 - pnpm 9+
-- MariaDB
+- SQLite（默认）或 MariaDB 10.11+
 - Redis
 - Docker，可选但推荐用于部署
 
@@ -88,7 +88,7 @@ cp deploy/config.example.yaml deploy/config.yaml
 根据你的环境修改生成的配置：
 
 - `server`：监听地址、端口、前端地址、请求体限制、CORS 和安全响应头。
-- `database`：MariaDB 连接设置。
+- `database`：SQLite 或 MySQL/MariaDB 数据库设置。
 - `redis`：缓存和队列后端设置。
 - `gateway`：上游超时、请求体大小限制、路由和模型行为。
 - `security`：URL 白名单、响应头过滤、代理兜底和 CSP。
@@ -147,14 +147,14 @@ docker build -t ikik-api:local .
 
 ## Docker 快速部署
 
-推荐直接拉取多架构镜像 `ghcr.io/ipanel/sliderapiv2:latest`，并通过维护好的 Compose 配置启动 ikik-api、MariaDB 和 Redis：
+推荐直接拉取多架构镜像 `ghcr.io/ipanel/sliderapiv2:latest`。默认 Compose 启动 ikik-api、SQLite 和 Redis：
 
 ```bash
 mkdir -p sliderapiv2 && cd sliderapiv2
 curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
 ```
 
-生产环境应在 `.env` 中将 `IKIK_API_IMAGE` 固定为版本标签，例如 `ghcr.io/ipanel/sliderapiv2:vX.Y.Z`。升级、外部数据库、OAuth 环境变量和接口 404 排查请参阅 [deploy/README.md](deploy/README.md)。
+SQLite 数据持久化在 `data/` 目录。新安装默认打开网页初始化向导，SQLite 已预选；需要内置 MariaDB 时，在一键部署命令末尾添加 `-s -- --database mysql`，并在向导中选择 MySQL。默认 SQLite Compose 不会启动 MariaDB；如果仍在该栈中选择 MySQL，必须填写应用容器能够访问的外部数据库。修改数据库驱动或更换 Compose 文件不会自动迁移已有数据。若需要完全无人值守初始化，可在首次启动前设置 `AUTO_SETUP=true`。生产环境应在 `.env` 中将 `IKIK_API_IMAGE` 固定为版本标签，例如 `ghcr.io/ipanel/sliderapiv2:vX.Y.Z`。手动部署、数据库选择、升级、备份、OAuth 环境变量和接口 404 排查请参阅 [deploy/README.md](deploy/README.md)。
 
 ## 测试
 
@@ -211,12 +211,12 @@ Nginx 默认会丢弃带下划线的请求头，这可能破坏会话路由和�
 
 推荐的生产基础设置：
 
-- 使用应用容器外部的 MariaDB 和 Redis。
+- 单应用实例优先使用 SQLite；多实例或需要外部数据库运维能力时使用 MariaDB，并始终保持 Redis 可用。
 - 挂载生产配置文件，不要把密钥写入镜像。
 - 在反向代理或负载均衡器处终止 TLS。
 - 不要让 `/api/*`、`/v1/*`、流式接口和网关路由进入 CDN 缓存。
 - 统一配置反向代理和后端的请求体大小限制。
-- 在执行迁移或升级应用前备份 MariaDB。
+- 在执行迁移或升级应用前备份当前使用的数据库和 `/app/data`。
 
 ## 安全
 

@@ -2,281 +2,315 @@
 
 This directory contains the supported deployment entry points for [ipanel/SliderAPIv2](https://github.com/ipanel/SliderAPIv2).
 
-## Recommended architecture
+## Database choice
 
-The standard Docker deployment starts three services:
+Docker deployment is now **SQLite-first**:
 
-- `ikik-api`: `ghcr.io/ipanel/sliderapiv2`, published for `linux/amd64` and `linux/arm64`
-- `mariadb`: MariaDB 10.11
-- `redis`: Redis 8
+- SQLite is the default for new installations. It requires only `ikik-api` and Redis and stores `ikik-api.db` under the persistent `/app/data` directory.
+- MariaDB remains available through the explicit `*.mysql.yml` Compose files.
+- New installations open the web setup wizard by default; SQLite is preselected and MySQL remains available.
+- Changing `DATABASE_DRIVER` does not migrate data. Back up the current database and perform an explicit migration before changing engines.
 
-The application runs with `AUTO_SETUP=true`. On first startup it connects to MariaDB and Redis, applies migrations, creates the initial administrator, and writes generated configuration/state under `/app/data`. **The application data volume or `./data` directory must be persisted.**
+SQLite is recommended for a single application instance and simple self-hosted installations. Use MariaDB when running multiple application replicas or when you need an external database service and its operational tooling.
 
-## Files
+## Compose files
 
-| File | Purpose |
+| File | Services and purpose |
 |---|---|
-| `docker-compose.local.yml` | Recommended deployment with bind-mounted local data directories |
-| `docker-compose.yml` | Deployment with Docker named volumes |
-| `docker-compose.standalone.yml` | Application only; use external MariaDB and Redis |
-| `docker-compose.dev.yml` | Build the image from the current local source tree |
-| `.env.example` | Environment variable template |
-| `docker-deploy.sh` | Installs or updates templates, generates secrets only on first install, pulls images, and starts the stack |
-| `DOCKER.md` | Image-oriented deployment reference |
+| `docker-compose.local.yml` | **Recommended SQLite deployment** with bind-mounted `data/` and `redis_data/` |
+| `docker-compose.yml` | SQLite deployment with Docker named volumes |
+| `docker-compose.dev.yml` | Build local source and run with SQLite |
+| `docker-compose.local.mysql.yml` | MariaDB deployment with bind-mounted `data/`, `mariadb_data/`, and `redis_data/` |
+| `docker-compose.mysql.yml` | MariaDB deployment with Docker named volumes |
+| `docker-compose.dev.mysql.yml` | Build local source and run with MariaDB |
+| `docker-compose.standalone.yml` | Application only; defaults to SQLite and requires external Redis, with external MySQL/MariaDB optional |
+| `.env.example` | Environment template for bundled SQLite/MariaDB Compose stacks |
+| `.env.standalone.example` | Standalone template; defaults external services to `host.docker.internal` |
+| `docker-deploy.sh` | Safe installer/updater that preserves the selected database engine and existing `.env` |
+| `DOCKER.md` | Container-image and standalone examples |
 | `install.sh` | Linux binary/systemd installer |
 
-## One-click Docker deployment
+Do not combine the SQLite and MySQL Compose files as base/override files. Each one is a complete stack.
 
-Requirements: Docker Engine with Docker Compose v2, OpenSSL, and either curl or wget.
+## One-click deployment
 
-Run the installer in a new empty directory:
+Docker Engine with Docker Compose v2 is always required. New installations additionally require OpenSSL and either curl or wget because the installer downloads templates and generates secrets locally.
+
+### SQLite (default)
 
 ```bash
 mkdir -p sliderapiv2 && cd sliderapiv2
 curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
 ```
 
-The script:
+Equivalent explicit form:
 
-1. downloads `docker-compose.local.yml` as `docker-compose.yml`;
-2. downloads the current `.env.example`;
-3. on a first install, creates `.env` and generates separate MariaDB root, MariaDB application, Redis, JWT, and TOTP secrets;
-4. on an existing deployment, updates the templates but preserves `.env` and every persisted credential;
-5. creates `data/`, `mariadb_data/`, and `redis_data/`;
-6. pulls the GHCR image and starts the complete stack.
+```bash
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --database sqlite
+```
 
-It does not print generated secrets. Back up `.env` securely together with the data directories. If persistent data exists but `.env` is missing, the script refuses to generate replacement credentials. A legacy deployment without the required MariaDB settings must be migrated explicitly instead of being overwritten.
+This starts `ikik-api` and Redis. The SQLite database is stored at `data/ikik-api.db` on the host. The host port binds to `127.0.0.1` by default so an unauthenticated first-run setup page is not exposed to the network. Complete setup locally (or through an SSH tunnel/reverse proxy), then set `BIND_HOST=0.0.0.0` only when external access is intentionally protected.
 
-For a non-interactive template update after taking a backup, pass `--yes`: `curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --yes`. Existing `.env` values are still preserved.
+### MariaDB (optional)
+
+```bash
+mkdir -p sliderapiv2 && cd sliderapiv2
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --database mysql
+```
+
+This starts `ikik-api`, MariaDB, and Redis and creates `mariadb_data/`.
+
+The short flags `--sqlite` and `--mysql` are also accepted. For a non-interactive update after taking a backup, add `--yes`.
+
+The installer:
+
+1. selects the complete SQLite or MariaDB Compose file; new installs use local directories and existing named-volume installs keep named volumes;
+2. resolves the newest strict `vX.Y.Z` tag, then downloads Compose and `.env.example` from that exact tag;
+3. creates `.env` only on a new installation and pins `IKIK_API_IMAGE` to the same release tag;
+4. generates Redis, JWT, and TOTP secrets, plus MariaDB passwords only in MySQL mode;
+5. preserves existing credentials, database type, Compose file, and custom volume mappings during upgrades, while advancing the official `IKIK_API_IMAGE` tag;
+6. refuses an automatic database-engine switch;
+7. refuses to generate replacement credentials if persistent data or an existing Compose file is present but `.env` is missing.
+
+A legacy deployment whose `.env` has no `DATABASE_DRIVER` is treated as MySQL, because previous official Compose files were MariaDB-only. This prevents an upgrade from silently opening an empty SQLite database.
+
+**Never replace an existing MariaDB deployment?s `docker-compose.yml` with the new default SQLite template.** Keep using its original MySQL/MariaDB Compose file (or the preserved one-click file) and update only the image tag. Replacing the file does not migrate data and can omit the MariaDB service.
+
+New installations write a stable `COMPOSE_PROJECT_NAME=sliderapiv2` value. During upgrades, the installer reuses an explicit value or discovers the existing project from Docker container/volume labels; if a named/custom-volume deployment cannot be identified safely, it stops instead of attaching empty volumes. The automatic updater only manages deployments whose selected stack is stored as `./docker-compose.yml`. It verifies existing container provenance and refuses `COMPOSE_FILE`, standard override files, and any other YAML file that looks like a Compose stack, because silently choosing the wrong file could change ports, networks, environment values, or storage mounts. Update manual `-f` deployments with the exact original file list.
+
+Older Compose files that inject connection settings as runtime `DATABASE_*` or `REDIS_*` variables are also rejected until the `ikik-api` service entries are renamed to `SETUP_DATABASE_*` and `SETUP_REDIS_*`. Do not rename `DATABASE_MAX_*`/`REDIS_POOL_*` tuning variables, and keep `REDIS_PASSWORD` on the Redis service itself. The application also fails fast if a setup-only key and its legacy runtime key are both present, even when their values match. This one-time migration prevents environment variables from overriding `/app/data/config.yaml` after every restart.
 
 Check the deployment:
 
 ```bash
-docker compose ps
-docker compose logs -f ikik-api
+docker compose -f ./docker-compose.yml ps
+docker compose -f ./docker-compose.yml logs -f ikik-api
 curl -f http://127.0.0.1:8080/health
 ```
 
-If `ADMIN_PASSWORD` was left empty, the initial password is written to the first-start application log. Store it immediately and change it after signing in.
+New installations open `http://127.0.0.1:8080` in setup mode. SQLite is preselected. Use Redis host `redis` and the generated `REDIS_PASSWORD` from `.env`. For the bundled MariaDB stack, select MySQL and use host `mariadb`, the `MARIADB_USER` value, and `MARIADB_PASSWORD` from `.env`.
 
-## Manual Docker deployment
+If you explicitly enable `AUTO_SETUP=true` and leave `ADMIN_PASSWORD` empty, the generated initial password is written to the first-start application log. Store it immediately and change it after signing in.
+
+## Manual deployment
 
 ```bash
 git clone https://github.com/ipanel/SliderAPIv2.git
 cd SliderAPIv2/deploy
 cp .env.example .env
+chmod 600 .env
 ```
 
-Edit `.env` and set at least these values:
+Set stable production values in `.env`:
 
 ```dotenv
-IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:latest
-MARIADB_ROOT_PASSWORD=<strong-random-value>
-MARIADB_PASSWORD=<strong-random-value>
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z
 REDIS_PASSWORD=<strong-random-value>
 JWT_SECRET=<64-hex-characters>
 TOTP_ENCRYPTION_KEY=<64-hex-characters>
 ```
 
-Then start the local-directory stack:
+### Manual SQLite deployment
+
+Keep the browser-based default:
+
+```dotenv
+AUTO_SETUP=false
+DATABASE_DRIVER=sqlite
+DATABASE_PATH=ikik-api.db
+```
+
+Then start:
+
+```bash
+mkdir -p data redis_data
+docker compose -f docker-compose.local.yml pull
+docker compose -f docker-compose.local.yml up -d
+```
+
+For Docker named volumes, use `docker-compose.yml`.
+
+### Manual MariaDB deployment
+
+Also set:
+
+```dotenv
+AUTO_SETUP=false
+DATABASE_DRIVER=mysql
+MARIADB_ROOT_PASSWORD=<strong-random-value>
+MARIADB_PASSWORD=<strong-random-value>
+```
+
+Then start the complete MySQL stack:
 
 ```bash
 mkdir -p data mariadb_data redis_data
-docker compose -f docker-compose.local.yml pull
-docker compose -f docker-compose.local.yml up -d
-docker compose -f docker-compose.local.yml ps
+docker compose -f docker-compose.local.mysql.yml pull
+docker compose -f docker-compose.local.mysql.yml up -d
 ```
 
-For Docker named volumes, use `docker-compose.yml` instead.
+For Docker named volumes, use `docker-compose.mysql.yml`.
 
-## Image versions and upgrades
+## Web setup wizard
 
-The default image is:
+New Compose installations use `AUTO_SETUP=false` and open the browser setup wizard at `http://127.0.0.1:8080`. SQLite is selected by default, and MySQL can be selected on the same page.
 
-```text
-ghcr.io/ipanel/sliderapiv2:latest
-```
+Keep the choice consistent with the infrastructure you started:
 
-For reproducible production deployments, pin a release in `.env`:
+- SQLite Compose files start `ikik-api + Redis`; keep SQLite selected, use Redis host `redis`, and copy `REDIS_PASSWORD` from `.env`.
+- `*.mysql.yml` files additionally start MariaDB; select MySQL, use database host `mariadb`, and copy `MARIADB_USER`/`MARIADB_PASSWORD` from `.env`.
+- `docker-compose.standalone.yml` runs the application alone, defaults to SQLite, requires an external Redis service, and can use an external MySQL/MariaDB server when `DATABASE_DRIVER=mysql`. Copy `.env.standalone.example` rather than the bundled-stack `.env.example`; for MySQL, set `DATABASE_HOST` to a host reachable from the container.
+
+For unattended installation, set `AUTO_SETUP=true` before the first startup. In that mode `DATABASE_DRIVER` and the other setup values in `.env` are applied without showing the wizard.
+
+The wizard writes `config.yaml` and `.installed` under `/app/data`. Persist that directory. After installation, changing only `.env` or selecting another Compose file is **not** a database migration.
+
+## Upgrades and database safety
+
+Pin a release tag in production:
 
 ```dotenv
 IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z
 ```
 
-Upgrade a deployment with:
+Always pass the exact Compose file used by the deployment so a shell-level `COMPOSE_FILE` value cannot select another stack. A one-click deployment stores its selected template as `./docker-compose.yml`; a manual local deployment may instead use `./docker-compose.local.yml` or `./docker-compose.local.mysql.yml`.
 
 ```bash
-docker compose pull
-docker compose up -d
-docker image prune -f
+COMPOSE_PATH=./docker-compose.yml
+docker compose -f "$COMPOSE_PATH" pull
+docker compose -f "$COMPOSE_PATH" up -d
 ```
 
-Roll back by restoring the database/data backup, setting `IKIK_API_IMAGE` to the previous `vX.Y.Z`, and running `docker compose up -d` again. Database migrations may not be backward compatible, so do not roll back only the container image after a schema-changing release.
+The one-click updater detects the existing `.env` and keeps its database type. Passing a conflicting `--sqlite` or `--mysql` flag is rejected.
 
-If GHCR returns `denied` while pulling, authenticate with an account/token that has `read:packages` permission:
+### SQLite backup
+
+The following container-copy procedure covers both bind mounts and Docker named volumes. Stop the application and Redis first so the SQLite database, WAL, shared-memory files, and Redis snapshot are copied consistently:
+
+```bash
+set -euo pipefail
+umask 077
+COMPOSE_PATH=./docker-compose.yml
+BACKUP_DIR="backups/sqlite-$(date +%F-%H%M%S)"
+mkdir -p "$BACKUP_DIR/app-data" "$BACKUP_DIR/redis-data"
+services_stopped=false
+restore_services() {
+  if [ "$services_stopped" = true ]; then
+    docker compose -f "$COMPOSE_PATH" start redis ikik-api >/dev/null || true
+  fi
+}
+trap restore_services EXIT
+
+services_stopped=true
+docker compose -f "$COMPOSE_PATH" stop ikik-api redis
+APP_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq ikik-api)
+REDIS_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq redis)
+docker cp "${APP_CONTAINER}:/app/data/." "$BACKUP_DIR/app-data"
+docker cp "${REDIS_CONTAINER}:/data/." "$BACKUP_DIR/redis-data"
+cp .env "$BACKUP_DIR/.env"
+cp "$COMPOSE_PATH" "$BACKUP_DIR/docker-compose.yml"
+docker compose -f "$COMPOSE_PATH" start redis ikik-api
+services_stopped=false
+trap - EXIT
+```
+
+For a manual bind-mounted deployment, `data/ikik-api.db` is the default database file. Do not run multiple ikik-api replicas against the same SQLite file.
+
+### MariaDB backup
+
+Stop the application before creating a logical database dump so no application write can fall between the SQL snapshot and the copied `/app/data`/Redis state. The password is not expanded into the host command line, and the cleanup trap restarts services if a later backup step fails. This works with bind mounts and named volumes:
+
+```bash
+# One-click installs use ./docker-compose.yml. For a manual bind-mount
+# MariaDB deployment, use ./docker-compose.local.mysql.yml instead.
+set -euo pipefail
+umask 077
+COMPOSE_PATH=./docker-compose.yml
+BACKUP_DIR="backups/mysql-$(date +%F-%H%M%S)"
+mkdir -p "$BACKUP_DIR/app-data" "$BACKUP_DIR/redis-data"
+services_stopped=false
+restore_services() {
+  if [ "$services_stopped" = true ]; then
+    docker compose -f "$COMPOSE_PATH" start redis ikik-api >/dev/null || true
+  fi
+}
+trap restore_services EXIT
+
+# Stop writers before the SQL snapshot so database and application state share one cutoff.
+services_stopped=true
+docker compose -f "$COMPOSE_PATH" stop ikik-api
+docker compose -f "$COMPOSE_PATH" exec -T mariadb sh -ec '
+  defaults_file=$(mktemp)
+  trap "rm -f $defaults_file" EXIT
+  chmod 600 "$defaults_file"
+  printf "[client]\nuser=%s\npassword=%s\n" "$MARIADB_USER" "$MARIADB_PASSWORD" > "$defaults_file"
+  mariadb-dump --defaults-extra-file="$defaults_file" --single-transaction "$MARIADB_DATABASE"
+' > "$BACKUP_DIR/database.sql"
+
+docker compose -f "$COMPOSE_PATH" stop redis
+APP_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq ikik-api)
+REDIS_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq redis)
+docker cp "${APP_CONTAINER}:/app/data/." "$BACKUP_DIR/app-data"
+docker cp "${REDIS_CONTAINER}:/data/." "$BACKUP_DIR/redis-data"
+cp .env "$BACKUP_DIR/.env"
+cp "$COMPOSE_PATH" "$BACKUP_DIR/docker-compose.yml"
+docker compose -f "$COMPOSE_PATH" start redis ikik-api
+services_stopped=false
+trap - EXIT
+```
+
+Do not archive a live `mariadb_data/` directory as if it were a consistent database backup. Use the logical dump above, `mariadb-backup`, or a storage snapshot taken while MariaDB is stopped. Do not use `docker compose -f "$COMPOSE_PATH" down -v` unless destroying all persisted data is intentional.
+
+## GHCR access
+
+The image is:
+
+```text
+ghcr.io/ipanel/sliderapiv2
+```
+
+If a private package returns `denied` while pulling, authenticate with a token that has `read:packages`:
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 ```
 
-If GitHub Actions fails while publishing with `permission_denied: write_package`, grant `ipanel/SliderAPIv2` **Write** access in the existing `sliderapiv2` package's **Manage Actions access** settings. Alternatively, configure repository secrets `GHCR_TOKEN` (classic PAT with `write:packages` and `read:packages`) and `GHCR_USERNAME`; the workflow requires both secrets to be configured together; when both are absent it uses the repository `GITHUB_TOKEN`. Never store these credentials in `.env` or source files.
-
-## Data and backup
-
-Local-directory deployment paths:
-
-```text
-data/           application config, installation marker, logs, and local state
-mariadb_data/   MariaDB data
-redis_data/     Redis persistence
-.env            secrets and deployment configuration
-```
-
-Stop writers before a consistent file-level backup:
-
-```bash
-docker compose down
-tar -czf sliderapiv2-backup.tar.gz .env data mariadb_data redis_data docker-compose.yml
-docker compose up -d
-```
-
-For larger production systems, use native MariaDB backup tools and test restoration regularly.
-
-## External MariaDB and Redis
-
-Use `docker-compose.standalone.yml` when the database and cache are managed outside the stack. Configure:
-
-```dotenv
-DATABASE_HOST=db.example.com
-DATABASE_PORT=3306
-DATABASE_USER=ikik_api
-DATABASE_PASSWORD=<database-password>
-DATABASE_DBNAME=ikik_api
-DATABASE_SSLMODE=disable
-REDIS_HOST=redis.example.com
-REDIS_PORT=6379
-REDIS_PASSWORD=<redis-password>
-```
-
-Start it with:
-
-```bash
-docker compose -f docker-compose.standalone.yml pull
-docker compose -f docker-compose.standalone.yml up -d
-```
-
-`host.docker.internal` is available through `host-gateway` if the external service runs on the Docker host. Prefer an actual host name or private network address in production.
+If GitHub Actions reports `permission_denied: write_package`, grant `ipanel/SliderAPIv2` Write access in the package's **Manage Actions access** settings, or configure both `GHCR_USERNAME` and a classic `GHCR_TOKEN` with `write:packages` and `read:packages`. If the old package was deleted, re-running the workflow normally recreates it under this repository; no deployment filename change is required.
 
 ## OAuth credentials
 
-No Google OAuth Client ID or Client Secret is embedded in the source code or image.
+No Google OAuth client secret is embedded in this repository or image. Provide optional credentials through environment variables:
 
-Set only the credentials required for the login flow you use:
-
-```dotenv
-# Custom Gemini AI Studio OAuth client
-GEMINI_OAUTH_CLIENT_ID=
-GEMINI_OAUTH_CLIENT_SECRET=
-
-# Gemini CLI / Code Assist OAuth client
-GEMINI_CLI_OAUTH_CLIENT_ID=
-GEMINI_CLI_OAUTH_CLIENT_SECRET=
-
-# Antigravity OAuth client
-ANTIGRAVITY_OAUTH_CLIENT_ID=
-ANTIGRAVITY_OAUTH_CLIENT_SECRET=
+```text
+GEMINI_CLI_OAUTH_CLIENT_ID
+GEMINI_CLI_OAUTH_CLIENT_SECRET
+ANTIGRAVITY_OAUTH_CLIENT_ID
+ANTIGRAVITY_OAUTH_CLIENT_SECRET
 ```
 
-Leaving a pair empty disables that credential-dependent flow; it no longer falls back to a credential embedded in the repository.
+Do not commit their values.
 
-## Reverse proxy
+## 404 troubleshooting
 
-Terminate TLS at Nginx, Caddy, or a load balancer. Do not cache `/api/*`, `/v1/*`, streaming responses, or gateway routes. When using Nginx, preserve streaming and headers required by clients; projects using underscore headers commonly need this in the `http` block:
-
-```nginx
-underscores_in_headers on;
-```
-
-## Operations
+If `/health` succeeds but routes such as `/api/v1/settings/public` or `/api/v1/admin/dashboard/users-ranking` return 404, inspect startup logs:
 
 ```bash
-# Status
-docker compose ps
-
-# Application logs
-docker compose logs --tail=200 -f ikik-api
-
-# MariaDB health
-docker compose exec mariadb healthcheck.sh --connect --innodb_initialized
-
-# Redis health (REDISCLI_AUTH is already injected into the container)
-docker compose exec redis redis-cli ping
-
-# Restart only the application
-docker compose restart ikik-api
-
-# Stop without deleting data
-docker compose down
+docker compose -f ./docker-compose.yml logs --tail=200 ikik-api
 ```
 
-Never use `docker compose down -v` unless you intentionally want to delete named volumes.
-
-## Troubleshooting
-
-### `/api/v1/settings/public` or admin dashboard routes return 404
-
-Both routes are part of the normal application router. A 404 immediately after deployment usually means the process is still serving the setup-only router because automatic initialization did not complete.
-
-Check:
+The process may still be running in setup-only mode because initialization failed, `/app/data` is not writable, or the selected database service is unavailable. Verify:
 
 ```bash
-docker compose ps
-docker compose logs --tail=300 ikik-api
-docker compose logs --tail=200 mariadb
-docker compose logs --tail=200 redis
+docker compose -f ./docker-compose.yml ps
+ls -la data
 ```
 
-Confirm all of the following:
+For SQLite, confirm that `data/ikik-api.db`, `data/config.yaml`, and `data/.installed` can be created. For MariaDB, also confirm that the `mariadb` service is healthy and credentials match `.env`.
 
-- `AUTO_SETUP=true` is present in the application container;
-- MariaDB and Redis are healthy and credentials match `.env`;
-- `/app/data` is writable and persistent;
-- the startup log reports successful migrations and server initialization.
-
-After correcting the dependency or credential issue:
-
-```bash
-docker compose restart ikik-api
-curl -f http://127.0.0.1:8080/health
-```
-
-Do not delete `/app/data` to work around setup failures; it contains the generated configuration and installation state.
-
-### Image pull or architecture errors
-
-```bash
-docker buildx imagetools inspect ghcr.io/ipanel/sliderapiv2:latest
-uname -m
-```
-
-The published manifest supports Linux AMD64 and Linux ARM64. Docker selects the matching platform automatically.
-
-### Port conflict
-
-Change the host port only:
-
-```dotenv
-SERVER_PORT=18080
-```
-
-The container continues listening on port `8080`.
-
-## Binary installation
-
-The Linux release archives contain `ikik-api` for AMD64 and ARM64. The installer and systemd unit are retained for non-Docker deployments:
+## Binary deployment
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/install.sh | sudo bash
 ```
 
-Binary deployments must provide their own MariaDB/Redis services and follow the same OAuth credential rules. See `config.example.yaml` and `ikik-api.service` before using this mode in production.
+Binary deployments must provide Redis and either a writable SQLite data directory or a reachable MySQL/MariaDB service. Review `config.example.yaml` and `ikik-api.service` before production use.

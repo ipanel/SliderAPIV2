@@ -1329,6 +1329,9 @@ func LoadForBootstrap() (*Config, error) {
 }
 
 func load(allowMissingJWTSecret bool) (*Config, error) {
+	if err := ValidateSetupEnvironmentConflicts(); err != nil {
+		return nil, err
+	}
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 
@@ -1350,8 +1353,29 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		// 配置文件不存在时使用默认值
 	}
 
+	// MySQL-only values may be stale or intentionally invalid in a SQLite
+	// deployment. Decode a sanitized snapshot without mutating process-wide
+	// environment variables or Viper's global overrides.
+	databaseDriver := strings.ToLower(strings.TrimSpace(viper.GetString("database.driver")))
+	decodeSource := viper.GetViper()
+	if databaseDriver == DatabaseDriverSQLite {
+		settings := viper.AllSettings()
+		databaseSettings, ok := settings["database"].(map[string]any)
+		if !ok {
+			databaseSettings = make(map[string]any)
+			settings["database"] = databaseSettings
+		}
+		databaseSettings["port"] = 0
+		databaseSettings["sslmode"] = ""
+
+		decodeSource = viper.New()
+		if err := decodeSource.MergeConfigMap(settings); err != nil {
+			return nil, fmt.Errorf("prepare sqlite config: %w", err)
+		}
+	}
+
 	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
+	if err := decodeSource.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
 	}
 	modules, err := normalizeModulesSubtree(viper.Get("modules"))
@@ -1362,6 +1386,16 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 
 	cfg.RunMode = NormalizeRunMode(cfg.RunMode)
 	cfg.Database.Driver = cfg.Database.DriverName()
+	if cfg.Database.Driver == DatabaseDriverMySQL {
+		sslMode, err := NormalizeDatabaseSSLMode(cfg.Database.SSLMode)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Database.SSLMode = sslMode
+	} else if cfg.Database.Driver == DatabaseDriverSQLite {
+		cfg.Database.Port = 0
+		cfg.Database.SSLMode = ""
+	}
 	cfg.Database.Path = resolveDatabasePath(cfg.Database.Driver, cfg.Database.Path, ResolveDataDir())
 	cfg.Server.Mode = strings.ToLower(strings.TrimSpace(cfg.Server.Mode))
 	if cfg.Server.Mode == "" {
@@ -2280,6 +2314,9 @@ func (c *Config) Validate() error {
 	}
 	switch c.Database.DriverName() {
 	case DatabaseDriverMySQL:
+		if _, err := NormalizeDatabaseSSLMode(c.Database.SSLMode); err != nil {
+			return err
+		}
 	case DatabaseDriverSQLite:
 		if strings.TrimSpace(c.Database.Path) == "" {
 			return fmt.Errorf("database.path is required when database.driver=sqlite")

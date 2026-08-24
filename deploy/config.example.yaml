@@ -1,4 +1,4 @@
-﻿# ikik-api Configuration File
+# ikik-api Configuration File
 # ikik-api 配置文件
 #
 # Copy this file to /etc/ikik-api/config.yaml and modify as needed
@@ -750,13 +750,13 @@ concurrency:
   ping_interval: 10
 
 # =============================================================================
-# Database Configuration (MariaDB/MySQL)
+# Database Configuration (SQLite default; MariaDB/MySQL optional)
 # 数据库配置 (MariaDB/MySQL/SQLite)
 # =============================================================================
 database:
   # Database driver: mysql or sqlite
   # 数据库驱动：mysql 或 sqlite
-  driver: "mysql"
+  driver: "sqlite"
   # SQLite file path (used only when driver=sqlite; relative to DATA_DIR)
   # SQLite 文件路径（仅 driver=sqlite 时使用；相对于 DATA_DIR）
   path: "ikik-api.db"
@@ -775,9 +775,9 @@ database:
   # Database name
   # 数据库名称
   dbname: "ikik-api"
-  # SSL mode: disable, require
-  # SSL 模式：disable（禁用）, prefer（优先加密，默认）, require（要求）, verify-ca（验证CA）, verify-full（完全验证）
-  # 默认值为 "disable"；MySQL/MariaDB 驱动仅用于兼容旧配置，连接时忽略该值
+  # SSL mode: disable, require, verify-ca, verify-full
+  # SSL 模式：disable（明文）, require（加密但不校验证书）, verify-ca（验证系统信任链）, verify-full（验证系统信任链和主机名）
+  # 默认值为 "disable"；verify-ca/verify-full 当前使用操作系统信任的 CA
   sslmode: "disable"
   # Max open connections (高并发场景建议 256+，需配合 MariaDB max_connections 调整)
   # 最大打开连接数
@@ -1110,6 +1110,3 @@ update:
   # Leave empty for direct connection (recommended for overseas servers)
   # 留空表示直连（适用于海外服务器）
   proxy_url: ""
-
-
-

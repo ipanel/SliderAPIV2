@@ -4,54 +4,31 @@
 
 ## 当前基线
 
-本项目已完成一次从二开 `v0.1.119` 到官方 `v0.1.121` 的合并。
+当前仓库地址：
 
-当前推荐继续开发和部署的分支是：
-
-```bash
-upgrade/v0.1.121-merge
+```text
+https://github.com/ipanel/SliderAPIv2
 ```
 
-历史保护分支：
+长期开发与部署分支为 `main`，发布版本使用严格格式的 `vX.Y.Z` tag。不要在文档中固定某个历史版本作为永久基线；开始升级前应从当前仓库和官方上游获取最新状态。
+
+首次配置远端时：
 
 ```bash
-backup/current-2dev
-custom/current-on-v0.1.119
-```
-
-后续不要再基于旧 `main` 直接开发。旧 `main` 是没有官方父历史的二开根提交，继续从它合并官方版本会让每次升级都变复杂。
-
-## 一次性分支整理
-
-建议把当前已合并官方 `v0.1.121` 的分支固定为长期二开主线。
-
-```bash
-git switch upgrade/v0.1.121-merge
-git switch -c custom/main
-```
-
-如果你有自己的私有 Git 仓库，建议推送到私有仓库保存：
-
-```bash
-git remote add origin <你的私有仓库地址>
-git push -u origin custom/main
-```
-
-添加官方仓库为上游源：
-
-```bash
+git remote set-url origin https://github.com/ipanel/SliderAPIv2.git
 git remote add upstream https://github.com/wenyi401/ikik-api.git
+git fetch origin --prune
 git fetch upstream --tags --prune
 ```
 
-如果 `origin` 或 `upstream` 已存在，不要重复添加，改用：
+如果 `upstream` 已存在，改用：
 
 ```bash
-git remote -v
 git remote set-url upstream https://github.com/wenyi401/ikik-api.git
+git fetch upstream --tags --prune
 ```
 
-建议开启 Git 冲突复用记录，后续遇到重复冲突时可以减少手工处理：
+建议开启 Git 冲突复用记录：
 
 ```bash
 git config rerere.enabled true
@@ -59,12 +36,12 @@ git config rerere.enabled true
 
 ## 每次合并官方新版本
 
-以下以官方发布 `v0.1.122` 为例。实际操作时把版本号替换成目标版本。
+下面使用 `TARGET_TAG` 表示准备合并的官方严格版本标签，例如 `v1.2.3`。先明确设置目标版本，再执行后续命令。
 
 ### 1. 确认工作区干净
 
 ```bash
-git switch custom/main
+git switch main
 git status --short
 ```
 
@@ -79,27 +56,28 @@ git fetch upstream --tags --prune
 查看最近版本：
 
 ```bash
-git tag -l "v0.1.*" --sort=-version:refname | head
+git tag -l "v*" --sort=-version:refname | head
 ```
 
 Windows PowerShell 可用：
 
 ```powershell
-git tag -l "v0.1.*" --sort=-version:refname | Select-Object -First 10
+git tag -l "v*" --sort=-version:refname | Select-Object -First 10
 ```
 
 如果只想拉取指定 tag：
 
 ```bash
-git fetch upstream refs/tags/v0.1.122:refs/tags/v0.1.122
+TARGET_TAG=vX.Y.Z
+git fetch upstream "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
 ```
 
 ### 3. 创建升级分支
 
 ```bash
-git switch custom/main
-git pull --ff-only
-git switch -c upgrade/v0.1.122-merge
+git switch main
+git pull --ff-only origin main
+git switch -c "upgrade/${TARGET_TAG}-merge"
 ```
 
 如果没有远程私有仓库，`git pull --ff-only` 可以跳过。
@@ -107,7 +85,7 @@ git switch -c upgrade/v0.1.122-merge
 ### 4. 合并官方版本
 
 ```bash
-git merge --no-ff v0.1.122
+git merge --no-ff "$TARGET_TAG"
 ```
 
 如果没有冲突，直接进入验证步骤。
@@ -130,7 +108,7 @@ git diff --name-only --diff-filter=U
 - 账号主自己调用自己的公共账号不能产生分成收入。
 - 分成流水必须保持幂等、可审计。
 
-本项目上次合并 `v0.1.121` 时出现过冲突的高频文件：
+历史合并过程中出现过冲突的高频文件：
 
 ```bash
 backend/cmd/server/wire_gen.go
@@ -211,18 +189,18 @@ git diff --cached --check
 ```bash
 git status
 git add <已解决的文件>
-git commit -m "merge: update custom build to v0.1.122"
+git commit -m "chore: merge upstream ${TARGET_TAG}"
 ```
 
 合并完成后，把升级分支合回长期二开主线：
 
 ```bash
-git switch custom/main
-git merge --ff-only upgrade/v0.1.122-merge
-git push
+git switch main
+git merge --ff-only "upgrade/${TARGET_TAG}-merge"
+git push origin main
 ```
 
-如果 `custom/main` 没有远程仓库，最后的 `git push` 跳过。
+如果不允许直接推送 `main`，请推送升级分支并通过 Pull Request 合并。
 
 ## 合并后的重点人工检查
 
@@ -253,7 +231,7 @@ git push
 Linux/macOS：
 
 ```bash
-VERSION=v0.1.122-2dev.1
+VERSION=vX.Y.Z-custom.1
 COMMIT=$(git rev-parse --short HEAD)
 IMAGE=ghcr.io/ipanel/sliderapiv2:$VERSION
 
@@ -268,7 +246,7 @@ docker build \
 Windows PowerShell：
 
 ```powershell
-$version = "v0.1.122-2dev.1"
+$version = "vX.Y.Z-custom.1"
 $commit = git rev-parse --short HEAD
 $image = "ghcr.io/ipanel/sliderapiv2:$version"
 
@@ -285,7 +263,7 @@ docker build `
 如果服务器可能是 `amd64` 或 `arm64`，使用 `buildx`：
 
 ```bash
-VERSION=v0.1.122-2dev.1
+VERSION=vX.Y.Z-custom.1
 COMMIT=$(git rev-parse --short HEAD)
 IMAGE=ghcr.io/ipanel/sliderapiv2:$VERSION
 
@@ -304,69 +282,107 @@ docker buildx build \
 
 ```bash
 docker login ghcr.io
-docker push ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
+docker push ghcr.io/ipanel/sliderapiv2:vX.Y.Z-custom.1
 docker push ghcr.io/ipanel/sliderapiv2:latest
 ```
 
 镜像 tag 建议包含官方版本和二开构建序号，例如：
 
 ```bash
-v0.1.122-2dev.1
-v0.1.122-2dev.2
+vX.Y.Z-custom.1
+vX.Y.Z-custom.2
 ```
 
 不要只依赖 `latest`，否则回滚时无法准确定位版本。
 
 ## 服务器部署方式
 
-推荐生产环境使用：
+Docker 部署默认使用 SQLite，并保留 MariaDB 作为可选方案：
 
-```bash
-deploy/docker-compose.local.yml
-```
+| 数据库 | 推荐 Compose | 适用场景 |
+|---|---|---|
+| SQLite（默认） | `deploy/docker-compose.local.yml` | 单实例、自托管、部署维护简单 |
+| MariaDB | `deploy/docker-compose.local.mysql.yml` | 多实例、外部数据库、需要数据库运维工具 |
 
-当前该 Compose 使用 MariaDB 10.11（镜像 `mariadb:10.11.14`），数据库服务名为 `mariadb`。
+两份 Compose 都是完整配置，不能作为 base/override 叠加使用。SQLite 栈启动 `ikik-api + Redis`，MariaDB 栈启动 `ikik-api + MariaDB + Redis`。
 
-原因：
+本地目录版将持久数据放在部署目录：
 
-- `data`、`mariadb_data`、`redis_data` 都在部署目录下，备份和迁移直观。
-- 不依赖 Docker 命名卷路径。
-- 整个 `deploy` 目录可以打包迁移。
+- SQLite：`data/`、`redis_data/`
+- MariaDB：`data/`、`mariadb_data/`、`redis_data/`
 
-如果你已经使用 `deploy/docker-compose.yml` 的命名卷方式，也可以继续使用，但备份和迁移要额外处理 Docker volumes。
+若使用命名卷，可分别选择 `docker-compose.yml` 或 `docker-compose.mysql.yml`。
 
 ## 首次部署自定义镜像
 
 服务器目录示例：
 
 ```bash
-/opt/ikik-api
-```
-
-准备部署文件：
-
-```bash
 mkdir -p /opt/ikik-api
 cd /opt/ikik-api
 ```
 
-把仓库中的 `deploy/docker-compose.local.yml` 和 `deploy/.env.example` 上传到服务器。
+### 方式一：一键部署 SQLite（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
+```
+
+脚本默认选择 SQLite。显式写法为：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --database sqlite
+```
+
+### 方式二：一键部署 MariaDB
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --database mysql
+```
+
+脚本首次安装时创建 `.env`、生成固定密钥并启动对应完整栈，然后通过网页初始化向导完成配置；SQLite 默认选中。新安装默认只把宿主机端口绑定到 `127.0.0.1`，避免未认证的初始化页面被公网或局域网用户抢先访问；请先在本机、SSH 隧道或受保护的反向代理后完成初始化，确认访问控制后再按需设置 `BIND_HOST=0.0.0.0`。升级时保留现有 `.env`、数据库类型、Compose 文件及其中的自定义卷映射。旧部署的 `.env` 若没有 `DATABASE_DRIVER`，会按历史行为保守识别为 MySQL，避免静默连接到空 SQLite。
+
+已有部署不能仅通过 `--database` 或修改 `DATABASE_DRIVER` 切换数据库。脚本发现参数与现有 `.env` 冲突时会拒绝继续，数据库切换必须先完成明确的数据迁移。
+
+新安装会在 `.env` 中固定 `COMPOSE_PROJECT_NAME=sliderapiv2`，避免目录改名后命名卷指向另一组空数据。旧命名卷部署会从已有容器/卷标签识别原项目名；无法可靠识别时脚本会停止，并要求先在 `.env` 中恢复原始 `COMPOSE_PROJECT_NAME`。一键更新还会核对现有容器记录的 Compose 工作目录和配置文件；若部署使用 `COMPOSE_FILE`、标准 override、任意其他 YAML Compose 文件或手动 `-f` 入口，脚本会主动拒绝执行，请使用原有完整 Compose 文件列表手动更新，避免遗漏端口、网络、环境变量或卷映射。
+
+旧版 Compose 若仍在 `ikik-api` 服务中注入运行期 `DATABASE_*` / `REDIS_*` 连接变量，一键更新也会在重建容器前停止。请仅把连接项改名为 `SETUP_DATABASE_*` / `SETUP_REDIS_*`；不要改名 `DATABASE_MAX_*`、`REDIS_POOL_*` 等调优变量，也要保留 Redis 服务自身的 `REDIS_PASSWORD`。同一连接项的 `SETUP_*` 与旧变量即使值相同也不能同时存在，应用会在启动前明确报错。完成这次迁移后，重启将不再用环境变量覆盖 `/app/data/config.yaml`。
+
+### 方式三：手动部署
+
+从仓库复制以下文件：
+
+```text
+deploy/.env.example
+deploy/docker-compose.local.yml
+```
+
+SQLite 使用 `docker-compose.local.yml`；MariaDB 则复制并使用 `docker-compose.local.mysql.yml`。然后：
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
 
-编辑 `.env`，至少修改：
+SQLite 至少确认：
 
-```bash
+```dotenv
+AUTO_SETUP=false
+DATABASE_DRIVER=sqlite
+DATABASE_PATH=ikik-api.db
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z
+REDIS_PASSWORD=<固定随机密钥>
+JWT_SECRET=<固定 64 位十六进制密钥>
+TOTP_ENCRYPTION_KEY=<固定 64 位十六进制密钥>
+```
+
+MariaDB 还必须设置：
+
+```dotenv
+AUTO_SETUP=false
+DATABASE_DRIVER=mysql
 MARIADB_ROOT_PASSWORD=<数据库 root 强密码>
 MARIADB_PASSWORD=<应用数据库用户强密码>
-IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
-JWT_SECRET=<固定随机密钥>
-TOTP_ENCRYPTION_KEY=<固定随机密钥>
-ADMIN_EMAIL=<管理员邮箱>
-ADMIN_PASSWORD=<首次部署可设置，已有数据后不要随意改>
-TZ=Asia/Shanghai
 ```
 
 生成密钥示例：
@@ -375,17 +391,39 @@ TZ=Asia/Shanghai
 openssl rand -hex 32
 ```
 
-`docker-compose.local.yml` 通过 `IKIK_API_IMAGE` 读取完整镜像引用，无需另外创建 override 文件。未设置时默认使用 `ghcr.io/ipanel/sliderapiv2:latest`；正式部署应在 `.env` 中固定版本标签，例如上面的 `v0.1.122-2dev.1`，更新或回滚时只修改该变量。
-
-启动：
+SQLite 启动：
 
 ```bash
+mkdir -p data redis_data
 docker login ghcr.io
 docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
-docker compose -f docker-compose.local.yml ps
-docker compose -f docker-compose.local.yml logs -f ikik-api
 ```
+
+MariaDB 启动：
+
+```bash
+mkdir -p data mariadb_data redis_data
+docker login ghcr.io
+docker compose -f docker-compose.local.mysql.yml pull
+docker compose -f docker-compose.local.mysql.yml up -d
+```
+
+生产环境应在 `.env` 中固定 `IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z`，不要只依赖 `latest`。
+
+### 使用网页初始化向导
+
+新部署默认 `AUTO_SETUP=false`，启动后打开 `http://127.0.0.1:8080` 完成初始化。向导默认选择 SQLite，同时支持 MySQL。
+
+数据库选择必须与已启动的基础设施匹配：
+
+- SQLite Compose 启动 `ikik-api + Redis`；保持 SQLite，Redis 主机填写 `redis`，密码使用 `.env` 中的 `REDIS_PASSWORD`。
+- `*.mysql.yml` 额外启动 MariaDB；选择 MySQL，数据库主机填写 `mariadb`，用户和密码使用 `.env` 中的 `MARIADB_USER`、`MARIADB_PASSWORD`。
+- 外部 MySQL/MariaDB 必须确保容器网络可达。
+
+若明确需要无人值守初始化，可在首次启动前设置 `AUTO_SETUP=true`，此时程序直接使用 `.env` 中的 `DATABASE_DRIVER`、管理员和连接配置，不显示网页向导。
+
+初始化结果会写入 `/app/data/config.yaml` 和 `/app/data/.installed`，因此 `data/` 必须持久化。网页向导是“首次安装配置”，不是数据迁移工具；已经初始化后不能通过重新选择数据库来自动迁移数据。
 
 健康检查：
 
@@ -397,68 +435,120 @@ curl -fsS http://127.0.0.1:8080/health
 
 ## 已部署环境更新镜像
 
-以下流程用于把服务器从旧自定义镜像更新到新自定义镜像。
+以下流程用于把服务器从旧自定义镜像更新到新自定义镜像。升级时继续使用当前部署的同一份 Compose，不要顺手切换数据库类型。
 
-### 1. 备份
+### 1. 备份 SQLite 部署
 
-进入服务器部署目录：
+下面的容器复制方式同时适用于本地目录和 Docker 命名卷。为了让 SQLite 主文件、WAL、共享内存文件及 Redis 快照保持一致，先停止应用和 Redis。`COMPOSE_PATH` 必须改成当前部署实际使用的文件；一键部署使用 `./docker-compose.yml`：
 
 ```bash
 cd /opt/ikik-api
-mkdir -p backups
+set -euo pipefail
+umask 077
+COMPOSE_PATH=./docker-compose.yml
+BACKUP_DIR="backups/sqlite-$(date +%F-%H%M%S)"
+mkdir -p "$BACKUP_DIR/app-data" "$BACKUP_DIR/redis-data"
+services_stopped=false
+restore_services() {
+  if [ "$services_stopped" = true ]; then
+    docker compose -f "$COMPOSE_PATH" start redis ikik-api >/dev/null || true
+  fi
+}
+trap restore_services EXIT
+
+services_stopped=true
+docker compose -f "$COMPOSE_PATH" stop ikik-api redis
+APP_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq ikik-api)
+REDIS_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq redis)
+docker cp "${APP_CONTAINER}:/app/data/." "$BACKUP_DIR/app-data"
+docker cp "${REDIS_CONTAINER}:/data/." "$BACKUP_DIR/redis-data"
+cp .env "$BACKUP_DIR/.env"
+cp "$COMPOSE_PATH" "$BACKUP_DIR/docker-compose.yml"
+docker compose -f "$COMPOSE_PATH" start redis ikik-api
+services_stopped=false
+trap - EXIT
 ```
 
-本地目录版备份：
+本地目录版的默认数据库文件是 `data/ikik-api.db`。不要让多个 ikik-api 实例共享同一个 SQLite 文件。
+
+### 2. 备份 MariaDB 部署
+
+先停止应用写入，再执行逻辑备份，确保 SQL 快照与随后复制的 `/app/data`、Redis 数据使用同一业务截止点。数据库密码不会展开到宿主机进程参数；清理 trap 会在后续步骤失败时恢复服务。该方式同样兼容本地目录和命名卷：
 
 ```bash
-tar czf backups/ikik-api-files-$(date +%F-%H%M%S).tgz \
-  .env docker-compose.local.yml data mariadb_data redis_data
+cd /opt/ikik-api
+set -euo pipefail
+umask 077
+COMPOSE_PATH=./docker-compose.yml
+BACKUP_DIR="backups/mysql-$(date +%F-%H%M%S)"
+mkdir -p "$BACKUP_DIR/app-data" "$BACKUP_DIR/redis-data"
+services_stopped=false
+restore_services() {
+  if [ "$services_stopped" = true ]; then
+    docker compose -f "$COMPOSE_PATH" start redis ikik-api >/dev/null || true
+  fi
+}
+trap restore_services EXIT
+
+# 先停止应用写入，使 SQL 快照与其余持久化数据保持同一业务截止点。
+services_stopped=true
+docker compose -f "$COMPOSE_PATH" stop ikik-api
+docker compose -f "$COMPOSE_PATH" exec -T mariadb sh -ec '
+  defaults_file=$(mktemp)
+  trap "rm -f $defaults_file" EXIT
+  chmod 600 "$defaults_file"
+  printf "[client]\nuser=%s\npassword=%s\n" "$MARIADB_USER" "$MARIADB_PASSWORD" > "$defaults_file"
+  mariadb-dump --defaults-extra-file="$defaults_file" --single-transaction "$MARIADB_DATABASE"
+' > "$BACKUP_DIR/database.sql"
+
+docker compose -f "$COMPOSE_PATH" stop redis
+APP_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq ikik-api)
+REDIS_CONTAINER=$(docker compose -f "$COMPOSE_PATH" ps -aq redis)
+docker cp "${APP_CONTAINER}:/app/data/." "$BACKUP_DIR/app-data"
+docker cp "${REDIS_CONTAINER}:/data/." "$BACKUP_DIR/redis-data"
+cp .env "$BACKUP_DIR/.env"
+cp "$COMPOSE_PATH" "$BACKUP_DIR/docker-compose.yml"
+docker compose -f "$COMPOSE_PATH" start redis ikik-api
+services_stopped=false
+trap - EXIT
 ```
 
-再做一次 MariaDB 逻辑备份：
-
-```bash
-set -a
-. ./.env
-set +a
-
-docker compose -f docker-compose.local.yml exec -T mariadb \
-  mariadb-dump -u"${MARIADB_USER:-ikik_api}" -p"${MARIADB_PASSWORD}" \
-  "${MARIADB_DATABASE:-ikik_api}" \
-  > backups/ikik-api-db-$(date +%F-%H%M%S).sql
-```
+不要把运行中的 `mariadb_data/` 目录直接打包后当成一致性数据库备份。需要物理备份时，应使用 `mariadb-backup`，或停止 MariaDB 后制作存储快照。
 
 不要执行：
 
 ```bash
-docker compose -f docker-compose.local.yml down -v
+docker compose -f "$COMPOSE_PATH" down -v
 ```
 
-`down -v` 会删除数据卷。生产环境除非已经确认要清空数据，否则禁止使用。
+`down -v` 会删除命名卷。生产环境除非明确清空全部数据，否则禁止使用。
 
-### 2. 修改镜像 tag
+### 3. 修改镜像 tag
 
-编辑服务器上的 `.env`，把 `IKIK_API_IMAGE` 改为要部署的完整镜像引用：
+编辑服务器上的 `.env`：
 
-```bash
-IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
+```dotenv
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z
 ```
 
-### 3. 拉取并重建容器
+### 4. 拉取并重建应用容器
+
+把 `COMPOSE_PATH` 设置为当前部署实际使用的文件；一键部署使用 `./docker-compose.yml`，手动部署可能使用 `./docker-compose.local.yml` 或 `./docker-compose.local.mysql.yml`。一键更新脚本只管理“已选模板保存为 `./docker-compose.yml`”的目录；检测到其他 YAML Compose 文件、override、`COMPOSE_FILE`，或现有容器标签指向不同配置文件时会拒绝执行，手动 `-f` 部署必须继续使用原文件更新：
 
 ```bash
+# 一键安装使用 ./docker-compose.yml；手动本地目录版 MariaDB 部署
+# 应改为 ./docker-compose.local.mysql.yml。
+COMPOSE_PATH=./docker-compose.yml
 docker login ghcr.io
-docker compose -f docker-compose.local.yml pull ikik-api
-docker compose -f docker-compose.local.yml up -d ikik-api
+docker compose -f "$COMPOSE_PATH" pull ikik-api
+docker compose -f "$COMPOSE_PATH" up -d ikik-api
 ```
 
-只更新应用容器时，不需要重建 MariaDB 和 Redis。
-
-### 4. 验证
+### 5. 验证
 
 ```bash
-docker compose -f docker-compose.local.yml ps
-docker compose -f docker-compose.local.yml logs --tail=200 ikik-api
+docker compose -f "$COMPOSE_PATH" ps
+docker compose -f "$COMPOSE_PATH" logs --tail=200 ikik-api
 curl -fsS http://127.0.0.1:8080/health
 ```
 
@@ -471,41 +561,28 @@ curl -fsS http://127.0.0.1:8080/health
 
 ## 回滚
 
-回滚前先确认旧镜像 tag，例如：
-
-```bash
-ghcr.io/ipanel/sliderapiv2:v0.1.121-2dev.1
-```
-
-修改 `.env` 中的完整镜像引用：
-
-```bash
-IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.121-2dev.1
-```
-
-执行：
-
-```bash
-docker compose -f docker-compose.local.yml pull ikik-api
-docker compose -f docker-compose.local.yml up -d ikik-api
-docker compose -f docker-compose.local.yml logs --tail=200 ikik-api
-```
-
-注意：如果新版本已经执行了不可逆数据库迁移，单纯回滚镜像可能不够。此时要结合升级前的数据库备份恢复。恢复生产数据库属于高风险操作，必须先确认影响范围和恢复点。
+将 `.env` 中的 `IKIK_API_IMAGE` 改回旧版本标签，再使用当前数据库对应的 Compose 拉取并重建应用容器。若新版本已经执行不可逆数据库迁移，还必须恢复升级前的 SQLite 或 MariaDB 备份；不能只回滚镜像。
 
 ## 服务器直接源码构建
 
-不推荐生产环境在服务器直接从源码构建。推荐流程是本地或 CI 构建镜像、推送镜像仓库、服务器只拉取镜像。
+不推荐生产环境在服务器直接从源码构建。需要临时测试时：
 
-如果临时需要在服务器源码构建测试，可以使用开发 compose：
+SQLite：
 
 ```bash
 cd deploy
 docker compose -f docker-compose.dev.yml up -d --build
-docker compose -f docker-compose.dev.yml logs -f ikik-api
 ```
 
-这个方式适合测试，不建议作为正式生产部署方式。
+MariaDB：
+
+```bash
+cd deploy
+cp .env.example .env
+# 编辑 .env，设置非空的 MARIADB_ROOT_PASSWORD 和 MARIADB_PASSWORD。
+chmod 600 .env
+docker compose -f docker-compose.dev.mysql.yml up -d --build
+```
 
 ## 常见问题
 
@@ -514,7 +591,7 @@ docker compose -f docker-compose.dev.yml logs -f ikik-api
 如果 `.env` 中仍把 `IKIK_API_IMAGE` 设置为没有仓库限定的 `ikik-api:latest`，说明镜像配置不正确。改为 GHCR 上带版本标签的完整镜像引用：
 
 ```bash
-IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z-custom.1
 ```
 
 `docker-compose.local.yml` 中对应的镜像声明应保持为 `${IKIK_API_IMAGE:-ghcr.io/ipanel/sliderapiv2:latest}`，由 `.env` 覆盖正式部署版本。
@@ -531,8 +608,8 @@ docker compose -f docker-compose.local.yml up -d ikik-api
 对比当前分支和官方 tag：
 
 ```bash
-git diff --stat v0.1.122..HEAD
-git diff --name-status v0.1.122..HEAD
+git diff --stat vX.Y.Z..HEAD
+git diff --name-status vX.Y.Z..HEAD
 ```
 
 重点确认这些二开模块仍存在：
@@ -596,8 +673,8 @@ TOTP_ENCRYPTION_KEY
 
 部署阶段：
 
-- 升级前已备份部署目录和 MariaDB。
-- 没有执行 `docker compose -f docker-compose.local.yml down -v`。
+- 升级前已备份部署目录和当前使用的 SQLite 或 MariaDB。
+- 没有执行会删除持久卷的 `docker compose down -v`。
 - `.env` 中生产密钥固定。
 - 更新后 `/health` 正常。
 - 管理后台、账号调用、收益管理核心页面验证正常。

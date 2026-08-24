@@ -56,6 +56,9 @@ func RunCLI() error {
 	fmt.Println()
 
 	cfg := &SetupConfig{
+		Database: DatabaseConfig{
+			Driver: defaultDatabaseDriver,
+		},
 		Server: ServerConfig{
 			Host: "0.0.0.0",
 			Port: 8080,
@@ -68,48 +71,7 @@ func RunCLI() error {
 
 	// Database configuration with validation
 	fmt.Println("── Database Configuration ──")
-
-	for {
-		cfg.Database.Host = promptString(reader, "MySQL/MariaDB Host", "localhost")
-		if cliValidateHostname(cfg.Database.Host) {
-			break
-		}
-		fmt.Println("  Invalid hostname format. Use alphanumeric, dots, hyphens only.")
-	}
-
-	for {
-		cfg.Database.Port = promptInt(reader, "MySQL/MariaDB Port", 3306)
-		if cliValidatePort(cfg.Database.Port) {
-			break
-		}
-		fmt.Println("  Invalid port. Must be between 1 and 65535.")
-	}
-
-	for {
-		cfg.Database.User = promptString(reader, "MySQL/MariaDB User", "root")
-		if cliValidateUsername(cfg.Database.User) {
-			break
-		}
-		fmt.Println("  Invalid username. Use alphanumeric and underscores only.")
-	}
-
-	cfg.Database.Password = promptPassword("MySQL/MariaDB Password")
-
-	for {
-		cfg.Database.DBName = promptString(reader, "Database Name", "ikik_api")
-		if cliValidateDBName(cfg.Database.DBName) {
-			break
-		}
-		fmt.Println("  Invalid database name. Start with letter, use alphanumeric and underscores.")
-	}
-
-	for {
-		cfg.Database.SSLMode = promptString(reader, "SSL Mode", "disable")
-		if cliValidateSSLMode(cfg.Database.SSLMode) {
-			break
-		}
-		fmt.Println("  Invalid SSL mode. Use: disable or require.")
-	}
+	configureDatabase(reader, &cfg.Database, promptPassword)
 
 	fmt.Println()
 	fmt.Print("Testing database connection... ")
@@ -205,7 +167,7 @@ func RunCLI() error {
 	// Confirm and install
 	fmt.Println()
 	fmt.Println("── Configuration Summary ──")
-	fmt.Printf("Database: %s@%s:%d/%s\n", cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
+	fmt.Printf("Database: %s\n", databaseSummary(&cfg.Database))
 	fmt.Printf("Redis: %s:%d\n", cfg.Redis.Host, cfg.Redis.Port)
 	fmt.Printf("Redis TLS: %s\n", map[bool]string{true: "enabled", false: "disabled"}[cfg.Redis.EnableTLS])
 	fmt.Printf("Admin: %s\n", cfg.Admin.Email)
@@ -239,6 +201,76 @@ func RunCLI() error {
 	return nil
 }
 
+func configureDatabase(reader *bufio.Reader, cfg *DatabaseConfig, passwordPrompt func(string) string) {
+	for {
+		cfg.Driver = strings.ToLower(promptString(reader, "Database Driver (sqlite/mysql)", defaultDatabaseDriver))
+		if cfg.Driver == defaultDatabaseDriver || cfg.Driver == "mysql" {
+			break
+		}
+		fmt.Println("  Invalid database driver. Use: sqlite or mysql.")
+	}
+
+	if cfg.Driver == defaultDatabaseDriver {
+		cfg.Path = promptString(reader, "SQLite Database Path", "ikik-api.db")
+		return
+	}
+
+	for {
+		cfg.Host = promptString(reader, "MySQL/MariaDB Host", "localhost")
+		if cliValidateHostname(cfg.Host) {
+			break
+		}
+		fmt.Println("  Invalid hostname format. Use alphanumeric, dots, hyphens only.")
+	}
+
+	for {
+		cfg.Port = promptInt(reader, "MySQL/MariaDB Port", 3306)
+		if cliValidatePort(cfg.Port) {
+			break
+		}
+		fmt.Println("  Invalid port. Must be between 1 and 65535.")
+	}
+
+	for {
+		cfg.User = promptString(reader, "MySQL/MariaDB User", "root")
+		if cliValidateUsername(cfg.User) {
+			break
+		}
+		fmt.Println("  Invalid username. Use alphanumeric and underscores only.")
+	}
+
+	cfg.Password = passwordPrompt("MySQL/MariaDB Password")
+
+	for {
+		cfg.DBName = promptString(reader, "Database Name", "ikik_api")
+		if cliValidateDBName(cfg.DBName) {
+			break
+		}
+		fmt.Println("  Invalid database name. Start with letter, use alphanumeric and underscores.")
+	}
+
+	for {
+		cfg.SSLMode = strings.ToLower(promptString(reader, "SSL Mode", "disable"))
+		if cliValidateSSLMode(cfg.SSLMode) {
+			break
+		}
+		fmt.Println("  Invalid SSL mode. Use: disable, require, verify-ca, or verify-full.")
+	}
+}
+
+func databaseSummary(cfg *DatabaseConfig) string {
+	if cfg == nil {
+		return "unknown"
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Driver), defaultDatabaseDriver) || strings.TrimSpace(cfg.Driver) == "" {
+		path := strings.TrimSpace(cfg.Path)
+		if path == "" {
+			path = "ikik-api.db"
+		}
+		return fmt.Sprintf("SQLite (%s)", path)
+	}
+	return fmt.Sprintf("MySQL/MariaDB (%s@%s:%d/%s, SSL: %s)", cfg.User, cfg.Host, cfg.Port, cfg.DBName, cfg.SSLMode)
+}
 func promptString(reader *bufio.Reader, prompt, defaultVal string) string {
 	if defaultVal != "" {
 		fmt.Printf("  %s [%s]: ", prompt, defaultVal)

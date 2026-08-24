@@ -72,7 +72,7 @@
 
           <div>
             <label class="input-label">{{ t('setup.database.driver') }}</label>
-            <Select v-model="formData.database.driver" :options="[{ value: 'mysql', label: t('setup.database.mysql') }, { value: 'sqlite', label: t('setup.database.sqlite') }]" />
+            <Select v-model="formData.database.driver" :options="[{ value: 'sqlite', label: t('setup.database.sqlite') }, { value: 'mysql', label: t('setup.database.mysql') }]" />
           </div>
 
           <template v-if="formData.database.driver === 'mysql'">
@@ -80,6 +80,7 @@
               <div><label class="input-label">{{ t('setup.database.host') }}</label><input v-model="formData.database.host" type="text" class="input" placeholder="localhost" /></div>
               <div><label class="input-label">{{ t('setup.database.port') }}</label><input v-model.number="formData.database.port" type="number" class="input" placeholder="3306" /></div>
             </div>
+            <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('setup.database.mysqlDockerHint') }}</p>
             <div class="grid grid-cols-2 gap-4">
               <div><label class="input-label">{{ t('setup.database.username') }}</label><input v-model="formData.database.user" type="text" class="input" placeholder="root" /></div>
               <div><label class="input-label">{{ t('setup.database.password') }}</label><input v-model="formData.database.password" type="password" class="input" :placeholder="t('setup.database.passwordPlaceholder')" /></div>
@@ -141,6 +142,8 @@
               {{ t('setup.redis.description') }}
             </p>
           </div>
+
+          <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('setup.redis.dockerHint') }}</p>
 
           <div class="grid grid-cols-2 gap-4">
             <div>
@@ -479,7 +482,7 @@ const getCurrentPort = (): number => {
 
 const formData = reactive<InstallRequest>({
   database: {
-    driver: 'mysql',
+    driver: 'sqlite',
     path: 'ikik-api.db',
     host: 'localhost',
     port: 3306,

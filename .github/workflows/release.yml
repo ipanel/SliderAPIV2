@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: read
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
@@ -35,6 +36,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
         run: |
           set -euo pipefail
           strict_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
@@ -47,33 +50,73 @@ jobs:
           # release so a rebuilt repository cannot publish an older version.
           repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           registry_token="$(
-            curl -fsSL --get \
+            curl -fsSL --user "${GHCR_USERNAME}:${GHCR_TOKEN}" --get \
               --data-urlencode "service=ghcr.io" \
               --data-urlencode "scope=repository:${repository}:pull" \
-              https://ghcr.io/token 2>/dev/null | jq -er '.token // .access_token' 2>/dev/null || true
+              https://ghcr.io/token | jq -er '.token // .access_token'
           )"
-          registry_latest="$(
-            if [[ -n "$registry_token" ]]; then
-              curl -fsSL \
-                -H "Authorization: Bearer ${registry_token}" \
-                "https://ghcr.io/v2/${repository}/tags/list?n=10000" 2>/dev/null |
-                jq -r '.tags[]?' 2>/dev/null |
-                grep -E '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' |
-                sed 's/^v//' |
-                sort -V |
-                tail -n 1 || true
-            fi
-          )"
+          registry_response="$(mktemp)"
+          if ! registry_status="$(
+            curl -sS -o "$registry_response" -w '%{http_code}' \
+              -H "Authorization: Bearer ${registry_token}" \
+              "https://ghcr.io/v2/${repository}/tags/list?n=10000"
+          )"; then
+            echo "Failed to query GHCR tags for ${repository}." >&2
+            rm -f "$registry_response"
+            exit 1
+          fi
+          case "$registry_status" in
+            200)
+              registry_latest="$(
+                jq -r '.tags[]?' "$registry_response" |
+                  grep -E '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' |
+                  sed 's/^v//' |
+                  sort -V |
+                  tail -n 1 || true
+              )"
+              ;;
+            404)
+              # A deleted or never-published package has no version floor yet.
+              registry_latest=""
+              ;;
+            *)
+              echo "GHCR tag lookup for ${repository} returned HTTP ${registry_status}." >&2
+              rm -f "$registry_response"
+              exit 1
+              ;;
+          esac
+          rm -f "$registry_response"
 
           resume=false
           if [[ -n "$latest" && "$(git rev-list -n 1 "$latest")" == "$(git rev-parse HEAD)" && "${latest#v}" == "$current_version" ]]; then
-            assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${latest}" --jq '.assets[].name' 2>/dev/null || true)"
-            for required in ikik-api-linux-amd64.tar.gz ikik-api-linux-arm64.tar.gz checksums.txt; do
-              if ! grep -Fxq "$required" <<< "$assets"; then
+            release_response="$(mktemp)"
+            if ! release_status="$(
+              curl -sS -o "$release_response" -w '%{http_code}' \
+                -H 'Accept: application/vnd.github+json' \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${latest}"
+            )"; then
+              echo "Failed to query the existing GitHub Release for ${latest}." >&2
+              rm -f "$release_response"
+              exit 1
+            fi
+            case "$release_status" in
+              200)
+                release_draft="$(jq -er '.draft' "$release_response")"
+                [[ "$release_draft" == "true" ]] && resume=true
+                ;;
+              404)
+                # Resume a tag whose draft release was never created.
                 resume=true
-                break
-              fi
-            done
+                ;;
+              *)
+                echo "GitHub Release lookup for ${latest} returned HTTP ${release_status}." >&2
+                rm -f "$release_response"
+                exit 1
+                ;;
+            esac
+            rm -f "$release_response"
           fi
 
           if [[ "$resume" == "true" ]]; then
@@ -168,6 +211,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
+          draft: true
           overwrite_files: true
           files: |
             release/ikik-api-linux-amd64.tar.gz
@@ -185,3 +229,15 @@ jobs:
     secrets:
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
       GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+
+  publish-release:
+    needs: [release, ghcr]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release after GHCR succeeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

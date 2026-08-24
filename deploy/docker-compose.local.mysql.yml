@@ -1,5 +1,5 @@
 # =============================================================================
-# ikik-api Docker Compose - Local Directory Version
+# ikik-api Docker Compose - Local Directory + MariaDB
 # =============================================================================
 # This configuration uses local directories for data storage instead of named
 # volumes, making it easy to migrate the entire deployment by simply copying
@@ -7,16 +7,16 @@
 #
 # Quick Start:
 #   1. Copy .env.example to .env and configure
-#   2. mkdir -p data redis_data
-#   3. docker compose -f docker-compose.local.yml up -d
-#   4. Check logs: docker compose -f docker-compose.local.yml logs -f ikik-api
+#   2. mkdir -p data mariadb_data redis_data
+#   3. docker compose -f docker-compose.local.mysql.yml up -d
+#   4. Check logs: docker compose -f docker-compose.local.mysql.yml logs -f ikik-api
 #   5. Access: http://localhost:8080
 #
 # Migration to New Server:
-#   1. docker compose -f docker-compose.local.yml down
+#   1. docker compose -f docker-compose.local.mysql.yml down
 #   2. tar czf ikik-api-deploy.tar.gz deploy/
 #   3. Transfer to new server and extract
-#   4. docker compose -f docker-compose.local.yml up -d
+#   4. docker compose -f docker-compose.local.mysql.yml up -d
 # =============================================================================
 
 services:
@@ -41,7 +41,7 @@ services:
       # - ./config.yaml:/app/data/config.yaml
     environment:
       # =======================================================================
-      # Setup mode (true: environment variables; false: web setup wizard)
+      # Auto Setup (REQUIRED for Docker deployment)
       # =======================================================================
       - AUTO_SETUP=${AUTO_SETUP:-false}
       - DATA_DIR=/app/data
@@ -55,18 +55,15 @@ services:
       - RUN_MODE=${RUN_MODE:-standard}
 
       # =======================================================================
-      # Database Configuration (SQLite by default)
+      # Database Configuration (MariaDB)
       # =======================================================================
-      # With AUTO_SETUP=true these values drive unattended initialization.
-      # With AUTO_SETUP=false use the web setup wizard and keep SQLite selected.
-      - SETUP_DATABASE_DRIVER=sqlite
-      - SETUP_DATABASE_PATH=${DATABASE_PATH:-ikik-api.db}
-      - SETUP_DATABASE_HOST=${DATABASE_HOST:-mariadb}
-      - SETUP_DATABASE_PORT=${DATABASE_PORT:-3306}
-      - SETUP_DATABASE_USER=${DATABASE_USER:-ikik_api}
-      - SETUP_DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
-      - SETUP_DATABASE_DBNAME=${DATABASE_DBNAME:-ikik_api}
-      - SETUP_DATABASE_SSLMODE=${DATABASE_SSLMODE:-disable}
+      - SETUP_DATABASE_DRIVER=mysql
+      - SETUP_DATABASE_HOST=mariadb
+      - SETUP_DATABASE_PORT=3306
+      - SETUP_DATABASE_USER=${MARIADB_USER:-ikik_api}
+      - SETUP_DATABASE_PASSWORD=${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}
+      - SETUP_DATABASE_DBNAME=${MARIADB_DATABASE:-ikik_api}
+      - SETUP_DATABASE_SSLMODE=disable
       - DATABASE_MAX_OPEN_CONNS=${DATABASE_MAX_OPEN_CONNS:-50}
       - DATABASE_MAX_IDLE_CONNS=${DATABASE_MAX_IDLE_CONNS:-10}
       - DATABASE_CONN_MAX_LIFETIME_MINUTES=${DATABASE_CONN_MAX_LIFETIME_MINUTES:-30}
@@ -155,6 +152,8 @@ services:
       # Examples: http://host:port, socks5://host:port
       - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
     depends_on:
+      mariadb:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -165,6 +164,37 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # ===========================================================================
+  # MariaDB Database
+  # ===========================================================================
+  mariadb:
+    image: mariadb:10.11.14
+    container_name: ikik-api-mariadb
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    volumes:
+      # Local directory mapping for easy migration
+      - ./mariadb_data:/var/lib/mysql
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      - MARIADB_DATABASE=${MARIADB_DATABASE:-ikik_api}
+      - MARIADB_USER=${MARIADB_USER:-ikik_api}
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}
+      - TZ=${TZ:-Asia/Shanghai}
+    networks:
+      - ikik-api-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # 注意：不暴露端口到宿主机，应用通过内部网络连接
+    # 如需调试，可临时添加：ports: ["127.0.0.1:3307:3306"]
 
   # ===========================================================================
   # Redis Cache

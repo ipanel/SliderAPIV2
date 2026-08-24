@@ -50,10 +50,10 @@ Please read the following carefully before deploying or operating this project:
 
 ## Tech Stack
 
-- Backend: Go 1.27.0, Gin, Ent, MariaDB, Redis
+- Backend: Go 1.27.0, Gin, Ent, SQLite/MySQL-compatible databases, Redis
 - Frontend: Vue 3, TypeScript, Vite, Pinia, Tailwind CSS
 - Testing: Go test, Vitest, vue-tsc, ESLint
-- Deployment: Docker or source build, with MariaDB and Redis included in the recommended Compose stack
+- Deployment: Docker or source build; SQLite + Redis by default, with an optional MariaDB stack
 
 ## Repository Layout
 
@@ -73,7 +73,7 @@ Please read the following carefully before deploying or operating this project:
 - Go 1.27.0
 - Node.js 20+
 - pnpm 9+
-- MariaDB 10.11+ (or SQLite for supported non-Compose configurations)
+- SQLite (default) or MariaDB 10.11+
 - Redis
 - Docker, optional but recommended for deployment
 
@@ -147,14 +147,14 @@ docker build -t ikik-api:local .
 
 ## Docker Quick Start
 
-The maintained deployment pulls the multi-platform image `ghcr.io/ipanel/sliderapiv2:latest` and starts ikik-api with MariaDB and Redis:
+The maintained deployment pulls the multi-platform image `ghcr.io/ipanel/sliderapiv2:latest` and starts the default SQLite + Redis stack:
 
 ```bash
 mkdir -p sliderapiv2 && cd sliderapiv2
 curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
 ```
 
-For production, pin `IKIK_API_IMAGE` in `.env` to a release tag such as `ghcr.io/ipanel/sliderapiv2:vX.Y.Z`. See [deploy/README.md](deploy/README.md) for upgrades, external databases, OAuth variables, backup, and 404 troubleshooting.
+SQLite data is persisted under `data/`. New installations open the browser setup wizard by default with SQLite preselected. To deploy the optional bundled MariaDB stack, run `curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --database mysql` and choose MySQL in the wizard. The default SQLite Compose stack does not start MariaDB; selecting MySQL there requires an external database reachable from the application container. Changing the driver or Compose file does not migrate existing data. Set `AUTO_SETUP=true` before the first startup only when unattended environment-based initialization is required. For production, pin `IKIK_API_IMAGE` in `.env` to a release tag such as `ghcr.io/ipanel/sliderapiv2:vX.Y.Z`. See [deploy/README.md](deploy/README.md) for manual deployment, database selection, upgrades, backup, OAuth variables, and 404 troubleshooting.
 
 ## Tests
 
@@ -211,12 +211,12 @@ Nginx drops headers containing underscores by default. That can break session ro
 
 Recommended production basics:
 
-- Use the maintained MariaDB and Redis containers, or managed external services.
+- Use SQLite for a single application instance, or MariaDB for multiple replicas/external database operations; keep Redis available.
 - Mount a production config file instead of baking secrets into the image.
 - Terminate TLS at the reverse proxy or load balancer.
 - Keep `/api/*`, `/v1/*`, streaming, and gateway routes out of CDN cache.
 - Configure request body limits consistently across the reverse proxy and backend.
-- Back up MariaDB and `/app/data` before applying migrations or upgrading the application.
+- Back up the selected database and `/app/data` before applying migrations or upgrading the application.
 
 ## Security
 

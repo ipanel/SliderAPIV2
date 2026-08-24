@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"ikik-api/internal/repository"
 	"ikik-api/internal/service"
 
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/redis/go-redis/v9"
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +28,7 @@ const (
 	defaultUserConcurrency     = 5
 	simpleModeAdminConcurrency = 30
 	defaultMigrationTimeout    = 60 * time.Second
+	defaultDatabaseDriver      = config.DatabaseDriverSQLite
 )
 
 func setupDefaultAdminConcurrency() int {
@@ -160,17 +159,26 @@ func normalizeDatabaseConfig(cfg *DatabaseConfig) error {
 	}
 	cfg.Driver = strings.ToLower(strings.TrimSpace(cfg.Driver))
 	if cfg.Driver == "" {
-		cfg.Driver = config.DatabaseDriverMySQL
+		cfg.Driver = defaultDatabaseDriver
 	}
 	if cfg.Driver == config.DatabaseDriverMySQL {
-		if cfg.SSLMode == "" {
-			cfg.SSLMode = "disable"
+		sslMode, err := config.NormalizeDatabaseSSLMode(cfg.SSLMode)
+		if err != nil {
+			return err
 		}
+		cfg.SSLMode = sslMode
 		return nil
 	}
 	if cfg.Driver != config.DatabaseDriverSQLite {
 		return fmt.Errorf("unsupported database driver %q", cfg.Driver)
 	}
+	// Ignore MySQL-only fields for SQLite so stale values cannot block setup.
+	cfg.Host = ""
+	cfg.Port = 0
+	cfg.User = ""
+	cfg.Password = ""
+	cfg.DBName = ""
+	cfg.SSLMode = ""
 	dataDir, err := filepath.Abs(GetDataDir())
 	if err != nil {
 		return fmt.Errorf("resolve data directory: %w", err)
@@ -227,8 +235,9 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 		}
 		return nil
 	}
-	defaultDSN := fmt.Sprintf("%s:%s@tcp(%s:%d)/?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true&time_zone=%%27%%2B00%%3A00%%27", cfg.User, cfg.Password, cfg.Host, cfg.Port)
-	db, err := sql.Open("mysql", defaultDSN)
+	serverCfg := *dbCfg
+	serverCfg.DBName = ""
+	db, _, err := repository.OpenSQLDatabase(&serverCfg)
 	if err != nil {
 		return fmt.Errorf("failed to connect to MySQL/MariaDB: %w", err)
 	}
@@ -572,11 +581,94 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 	return defaultValue
 }
 
+// getSetupEnvOrDefault reads setup-only variables first and falls back to legacy names.
+func getSetupEnvOrDefault(key, defaultValue string) string {
+	if value, defined := os.LookupEnv("SETUP_" + key); defined {
+		return value
+	}
+	if value, defined := os.LookupEnv(key); defined {
+		return value
+	}
+	return defaultValue
+}
+
+// getSetupEnvIntOrDefault strictly parses setup-only integers with legacy fallback.
+func getSetupEnvIntOrDefault(key string, defaultValue int) (int, error) {
+	value := getSetupEnvOrDefault(key, strconv.Itoa(defaultValue))
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", setupEnvironmentKey(key), err)
+	}
+	return parsed, nil
+}
+
+// getSetupEnvBoolOrDefault strictly parses setup-only booleans with legacy fallback.
+func getSetupEnvBoolOrDefault(key string, defaultValue bool) (bool, error) {
+	value := getSetupEnvOrDefault(key, strconv.FormatBool(defaultValue))
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean: %w", setupEnvironmentKey(key), err)
+	}
+	return parsed, nil
+}
+
+// setupEnvironmentKey identifies which environment name supplied a setup value.
+func setupEnvironmentKey(key string) string {
+	if _, defined := os.LookupEnv("SETUP_" + key); defined {
+		return "SETUP_" + key
+	}
+	return key
+}
+
+func databaseConfigFromSetupEnvironment() (DatabaseConfig, error) {
+	driver := strings.ToLower(strings.TrimSpace(getSetupEnvOrDefault("DATABASE_DRIVER", defaultDatabaseDriver)))
+	cfg := DatabaseConfig{
+		Driver:   driver,
+		Path:     getSetupEnvOrDefault("DATABASE_PATH", "ikik-api.db"),
+		Host:     getSetupEnvOrDefault("DATABASE_HOST", "localhost"),
+		User:     getSetupEnvOrDefault("DATABASE_USER", "ikik_api"),
+		Password: getSetupEnvOrDefault("DATABASE_PASSWORD", ""),
+		DBName:   getSetupEnvOrDefault("DATABASE_DBNAME", "ikik_api"),
+	}
+	if driver == config.DatabaseDriverMySQL {
+		port, err := getSetupEnvIntOrDefault("DATABASE_PORT", 3306)
+		if err != nil {
+			return DatabaseConfig{}, err
+		}
+		cfg.Port = port
+		cfg.SSLMode = getSetupEnvOrDefault("DATABASE_SSLMODE", "disable")
+	}
+	if err := validateDatabaseConfig(&cfg); err != nil {
+		return DatabaseConfig{}, fmt.Errorf("invalid database configuration: %w", err)
+	}
+	return cfg, nil
+}
+
 // AutoSetupFromEnv performs automatic setup using environment variables
 // This is designed for Docker deployment where all config is passed via env vars
 func AutoSetupFromEnv() error {
 	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
 	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
+
+	if err := config.ValidateSetupEnvironmentConflicts(); err != nil {
+		return err
+	}
+	databaseConfig, err := databaseConfigFromSetupEnvironment()
+	if err != nil {
+		return err
+	}
+	redisPort, err := getSetupEnvIntOrDefault("REDIS_PORT", 6379)
+	if err != nil {
+		return err
+	}
+	redisDB, err := getSetupEnvIntOrDefault("REDIS_DB", 0)
+	if err != nil {
+		return err
+	}
+	redisTLS, err := getSetupEnvBoolOrDefault("REDIS_ENABLE_TLS", false)
+	if err != nil {
+		return err
+	}
 
 	// Get timezone from TZ or TIMEZONE env var (TZ is standard for Docker)
 	tz := getEnvOrDefault("TZ", "")
@@ -586,26 +678,17 @@ func AutoSetupFromEnv() error {
 
 	// Build config from environment variables
 	cfg := &SetupConfig{
-		Database: DatabaseConfig{
-			Driver:   getEnvOrDefault("DATABASE_DRIVER", config.DatabaseDriverMySQL),
-			Path:     getEnvOrDefault("DATABASE_PATH", "ikik-api.db"),
-			Host:     getEnvOrDefault("DATABASE_HOST", "localhost"),
-			Port:     getEnvIntOrDefault("DATABASE_PORT", 3306),
-			User:     getEnvOrDefault("DATABASE_USER", "ikik_api"),
-			Password: getEnvOrDefault("DATABASE_PASSWORD", ""),
-			DBName:   getEnvOrDefault("DATABASE_DBNAME", "ikik_api"),
-			SSLMode:  getEnvOrDefault("DATABASE_SSLMODE", "disable"),
-		},
+		Database: databaseConfig,
 		Redis: RedisConfig{
-			Host:      getEnvOrDefault("REDIS_HOST", "localhost"),
-			Port:      getEnvIntOrDefault("REDIS_PORT", 6379),
-			Password:  getEnvOrDefault("REDIS_PASSWORD", ""),
-			DB:        getEnvIntOrDefault("REDIS_DB", 0),
-			EnableTLS: getEnvOrDefault("REDIS_ENABLE_TLS", "false") == "true",
+			Host:      getSetupEnvOrDefault("REDIS_HOST", "localhost"),
+			Port:      redisPort,
+			Password:  getSetupEnvOrDefault("REDIS_PASSWORD", ""),
+			DB:        redisDB,
+			EnableTLS: redisTLS,
 		},
 		Admin: AdminConfig{
-			Email:    getEnvOrDefault("ADMIN_EMAIL", "admin@ikik-api.local"),
-			Password: getEnvOrDefault("ADMIN_PASSWORD", ""),
+			Email:    getSetupEnvOrDefault("ADMIN_EMAIL", "admin@ikik-api.local"),
+			Password: getSetupEnvOrDefault("ADMIN_PASSWORD", ""),
 		},
 		Server: ServerConfig{
 			Host: getEnvOrDefault("SERVER_HOST", "0.0.0.0"),
@@ -621,6 +704,9 @@ func AutoSetupFromEnv() error {
 		},
 		Timezone:                tz,
 		MigrationTimeoutSeconds: getEnvIntOrDefault("SETUP_MIGRATION_TIMEOUT_SECONDS", 0),
+	}
+	if !validateHostname(cfg.Redis.Host) || !validatePort(cfg.Redis.Port) || cfg.Redis.DB < 0 {
+		return fmt.Errorf("invalid redis configuration")
 	}
 
 	// Generate JWT secret if not provided

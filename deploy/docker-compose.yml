@@ -8,7 +8,7 @@
 #   4. Access: http://localhost:8080
 #
 # All configuration is done via environment variables.
-# No Setup Wizard needed - the system auto-initializes on first run.
+# New installations default to the web setup wizard; set AUTO_SETUP=true for unattended initialization.
 # =============================================================================
 
 services:
@@ -24,7 +24,7 @@ services:
         soft: 100000
         hard: 100000
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8080}:8080"
+      - "${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080"
     volumes:
       # Data persistence (config.yaml will be auto-generated here)
       - ikik_api_data:/app/data
@@ -37,9 +37,9 @@ services:
       # - ./codex-instructions.md.tmpl:/app/data/codex-instructions.md.tmpl:ro
     environment:
       # =======================================================================
-      # Auto Setup (REQUIRED for Docker deployment)
+      # Setup mode (true: environment variables; false: web setup wizard)
       # =======================================================================
-      - AUTO_SETUP=true
+      - AUTO_SETUP=${AUTO_SETUP:-false}
       - DATA_DIR=/app/data
 
       # =======================================================================
@@ -51,15 +51,18 @@ services:
       - RUN_MODE=${RUN_MODE:-standard}
 
       # =======================================================================
-      # Database Configuration (MariaDB)
+      # Database Configuration (SQLite by default)
       # =======================================================================
-      - DATABASE_DRIVER=mysql
-      - DATABASE_HOST=mariadb
-      - DATABASE_PORT=3306
-      - DATABASE_USER=${MARIADB_USER:-ikik_api}
-      - DATABASE_PASSWORD=${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}
-      - DATABASE_DBNAME=${MARIADB_DATABASE:-ikik_api}
-      - DATABASE_SSLMODE=disable
+      # With AUTO_SETUP=true these values drive unattended initialization.
+      # With AUTO_SETUP=false use the web setup wizard and keep SQLite selected.
+      - SETUP_DATABASE_DRIVER=sqlite
+      - SETUP_DATABASE_PATH=${DATABASE_PATH:-ikik-api.db}
+      - SETUP_DATABASE_HOST=${DATABASE_HOST:-mariadb}
+      - SETUP_DATABASE_PORT=${DATABASE_PORT:-3306}
+      - SETUP_DATABASE_USER=${DATABASE_USER:-ikik_api}
+      - SETUP_DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
+      - SETUP_DATABASE_DBNAME=${DATABASE_DBNAME:-ikik_api}
+      - SETUP_DATABASE_SSLMODE=${DATABASE_SSLMODE:-disable}
       - DATABASE_MAX_OPEN_CONNS=${DATABASE_MAX_OPEN_CONNS:-50}
       - DATABASE_MAX_IDLE_CONNS=${DATABASE_MAX_IDLE_CONNS:-10}
       - DATABASE_CONN_MAX_LIFETIME_MINUTES=${DATABASE_CONN_MAX_LIFETIME_MINUTES:-30}
@@ -68,19 +71,19 @@ services:
       # =======================================================================
       # Redis Configuration
       # =======================================================================
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-      - REDIS_DB=${REDIS_DB:-0}
+      - SETUP_REDIS_HOST=redis
+      - SETUP_REDIS_PORT=6379
+      - SETUP_REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      - SETUP_REDIS_DB=${REDIS_DB:-0}
       - REDIS_POOL_SIZE=${REDIS_POOL_SIZE:-1024}
       - REDIS_MIN_IDLE_CONNS=${REDIS_MIN_IDLE_CONNS:-10}
-      - REDIS_ENABLE_TLS=${REDIS_ENABLE_TLS:-false}
+      - SETUP_REDIS_ENABLE_TLS=${REDIS_ENABLE_TLS:-false}
 
       # =======================================================================
       # Admin Account (auto-created on first run)
       # =======================================================================
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@ikik-api.local}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - SETUP_ADMIN_EMAIL=${ADMIN_EMAIL:-admin@ikik-api.local}
+      - SETUP_ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
 
       # =======================================================================
@@ -163,8 +166,6 @@ services:
       # Examples: http://host:port, socks5://host:port
       - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
     depends_on:
-      mariadb:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -185,36 +186,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-  # ===========================================================================
-  # MariaDB Database
-  # ===========================================================================
-  mariadb:
-    image: mariadb:10.11.14
-    container_name: ikik-api-mariadb
-    restart: unless-stopped
-    ulimits:
-      nofile:
-        soft: 100000
-        hard: 100000
-    volumes:
-      - mariadb_data:/var/lib/mysql
-    environment:
-      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
-      - MARIADB_DATABASE=${MARIADB_DATABASE:-ikik_api}
-      - MARIADB_USER=${MARIADB_USER:-ikik_api}
-      - MARIADB_PASSWORD=${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}
-      - TZ=${TZ:-Asia/Shanghai}
-    networks:
-      - ikik-api-network
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    # 注意：不暴露端口到宿主机，应用通过内部网络连接
-    # 如需调试，可临时添加：ports: ["127.0.0.1:3307:3306"]
 
   # ===========================================================================
   # Redis Cache
@@ -254,8 +225,6 @@ services:
 # =============================================================================
 volumes:
   ikik_api_data:
-    driver: local
-  mariadb_data:
     driver: local
   redis_data:
     driver: local

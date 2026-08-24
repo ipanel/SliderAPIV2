@@ -1,11 +1,13 @@
 # =============================================================================
-# ikik-api Docker Compose - Local Development Build
+# ikik-api Docker Compose - Local Development Build + MariaDB
 # =============================================================================
 # Build from local source code for testing changes.
 #
 # Usage:
 #   cd deploy
-#   docker compose -f docker-compose.dev.yml up --build
+#   cp .env.example .env
+#   # Set MARIADB_ROOT_PASSWORD and MARIADB_PASSWORD in .env first.
+#   docker compose -f docker-compose.dev.mysql.yml up --build
 # =============================================================================
 
 services:
@@ -26,15 +28,13 @@ services:
       - SERVER_PORT=8080
       - SERVER_MODE=debug
       - RUN_MODE=${RUN_MODE:-standard}
-      # SQLite is the default local development database.
-      - SETUP_DATABASE_DRIVER=sqlite
-      - SETUP_DATABASE_PATH=${DATABASE_PATH:-ikik-api.db}
-      - SETUP_DATABASE_HOST=${DATABASE_HOST:-mariadb}
-      - SETUP_DATABASE_PORT=${DATABASE_PORT:-3306}
-      - SETUP_DATABASE_USER=${DATABASE_USER:-ikik_api}
-      - SETUP_DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
-      - SETUP_DATABASE_DBNAME=${DATABASE_DBNAME:-ikik_api}
-      - SETUP_DATABASE_SSLMODE=${DATABASE_SSLMODE:-disable}
+      - SETUP_DATABASE_DRIVER=mysql
+      - SETUP_DATABASE_HOST=mariadb
+      - SETUP_DATABASE_PORT=3306
+      - SETUP_DATABASE_USER=${MARIADB_USER:-ikik_api}
+      - SETUP_DATABASE_PASSWORD=${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}
+      - SETUP_DATABASE_DBNAME=${MARIADB_DATABASE:-ikik_api}
+      - SETUP_DATABASE_SSLMODE=disable
       - DATABASE_MAX_OPEN_CONNS=${DATABASE_MAX_OPEN_CONNS:-50}
       - DATABASE_MAX_IDLE_CONNS=${DATABASE_MAX_IDLE_CONNS:-10}
       - DATABASE_CONN_MAX_LIFETIME_MINUTES=${DATABASE_CONN_MAX_LIFETIME_MINUTES:-30}
@@ -57,6 +57,8 @@ services:
       - ANTIGRAVITY_OAUTH_CLIENT_ID=${ANTIGRAVITY_OAUTH_CLIENT_ID:-}
       - ANTIGRAVITY_OAUTH_CLIENT_SECRET=${ANTIGRAVITY_OAUTH_CLIENT_SECRET:-}
     depends_on:
+      mariadb:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -67,6 +69,27 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  mariadb:
+    image: mariadb:10.11.14
+    container_name: ikik-api-mariadb-dev
+    restart: unless-stopped
+    volumes:
+      - ./mariadb_data:/var/lib/mysql
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      - MARIADB_DATABASE=${MARIADB_DATABASE:-ikik_api}
+      - MARIADB_USER=${MARIADB_USER:-ikik_api}
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD:?MARIADB_PASSWORD is required}
+      - TZ=${TZ:-Asia/Shanghai}
+    networks:
+      - ikik-api-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:8-alpine

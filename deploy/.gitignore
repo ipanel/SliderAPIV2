@@ -4,7 +4,7 @@
 
 # Data directories (generated at runtime when using docker-compose.local.yml)
 data/
-postgres_data/
+mariadb_data/
 redis_data/
 
 # Environment configuration (contains sensitive information)

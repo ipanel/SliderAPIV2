@@ -338,6 +338,7 @@
       sqlite: 'SQLite',
       path: 'Database File Path',
       sqliteHint: 'Relative paths are stored in the application data directory. SQLite is intended for single-instance deployments.',
+      mysqlDockerHint: 'For Docker, use an address reachable from the application container. The bundled MariaDB host is mariadb; the default SQLite stack does not start MariaDB.',
       host: 'Host',
       port: 'Port',
       username: 'Username',
@@ -355,6 +356,7 @@
     redis: {
       title: 'Redis Configuration',
       description: 'Connect to your Redis server',
+      dockerHint: 'The bundled Docker Compose Redis host is redis; localhost refers to the application container itself.',
       host: 'Host',
       port: 'Port',
       password: 'Password (optional)',

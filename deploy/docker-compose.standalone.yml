@@ -2,10 +2,10 @@
 # ikik-api Docker Compose - Standalone Configuration
 # =============================================================================
 # This configuration runs only the ikik-api application.
-# MariaDB and Redis must be provided externally.
+# Redis must be provided externally. MySQL/MariaDB is optional; SQLite is the default.
 #
 # Usage:
-#   1. Copy .env.example to .env and configure database/redis connection
+#   1. Copy .env.standalone.example to .env and configure the external Redis connection
 #   2. docker compose -f docker-compose.standalone.yml up -d
 #   3. Access: http://localhost:8080
 # =============================================================================
@@ -20,7 +20,7 @@ services:
         soft: 100000
         hard: 100000
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8080}:8080"
+      - "${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080"
     volumes:
       - ikik_api_data:/app/data
     extra_hosts:
@@ -29,7 +29,7 @@ services:
       # =======================================================================
       # Auto Setup
       # =======================================================================
-      - AUTO_SETUP=true
+      - AUTO_SETUP=${AUTO_SETUP:-false}
       - DATA_DIR=/app/data
 
       # =======================================================================
@@ -41,36 +41,37 @@ services:
       - RUN_MODE=${RUN_MODE:-standard}
 
       # =======================================================================
-      # Database Configuration (MariaDB) - Required
+      # Database Configuration (SQLite by default; external MySQL is optional)
       # =======================================================================
-      - DATABASE_DRIVER=mysql
-      - DATABASE_HOST=${DATABASE_HOST:?DATABASE_HOST is required}
-      - DATABASE_PORT=${DATABASE_PORT:-3306}
-      - DATABASE_USER=${DATABASE_USER:-ikik_api}
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
-      - DATABASE_DBNAME=${DATABASE_DBNAME:-ikik_api}
-      - DATABASE_SSLMODE=${DATABASE_SSLMODE:-disable}
+      - SETUP_DATABASE_DRIVER=${DATABASE_DRIVER:-sqlite}
+      - SETUP_DATABASE_PATH=${DATABASE_PATH:-ikik-api.db}
+      - SETUP_DATABASE_HOST=${DATABASE_HOST:-host.docker.internal}
+      - SETUP_DATABASE_PORT=${DATABASE_PORT:-3306}
+      - SETUP_DATABASE_USER=${DATABASE_USER:-ikik_api}
+      - SETUP_DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
+      - SETUP_DATABASE_DBNAME=${DATABASE_DBNAME:-ikik_api}
+      - SETUP_DATABASE_SSLMODE=${DATABASE_SSLMODE:-disable}
       - DATABASE_MAX_OPEN_CONNS=${DATABASE_MAX_OPEN_CONNS:-50}
       - DATABASE_MAX_IDLE_CONNS=${DATABASE_MAX_IDLE_CONNS:-10}
       - DATABASE_CONN_MAX_LIFETIME_MINUTES=${DATABASE_CONN_MAX_LIFETIME_MINUTES:-30}
       - DATABASE_CONN_MAX_IDLE_TIME_MINUTES=${DATABASE_CONN_MAX_IDLE_TIME_MINUTES:-5}
 
       # =======================================================================
-      # Redis Configuration - Required
+      # Redis Configuration (external service required)
       # =======================================================================
-      - REDIS_HOST=${REDIS_HOST:?REDIS_HOST is required}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDIS_DB=${REDIS_DB:-0}
+      - SETUP_REDIS_HOST=${REDIS_HOST:-host.docker.internal}
+      - SETUP_REDIS_PORT=${REDIS_PORT:-6379}
+      - SETUP_REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - SETUP_REDIS_DB=${REDIS_DB:-0}
       - REDIS_POOL_SIZE=${REDIS_POOL_SIZE:-1024}
       - REDIS_MIN_IDLE_CONNS=${REDIS_MIN_IDLE_CONNS:-10}
-      - REDIS_ENABLE_TLS=${REDIS_ENABLE_TLS:-false}
+      - SETUP_REDIS_ENABLE_TLS=${REDIS_ENABLE_TLS:-false}
 
       # =======================================================================
       # Admin Account (auto-created on first run)
       # =======================================================================
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@ikik-api.local}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - SETUP_ADMIN_EMAIL=${ADMIN_EMAIL:-admin@ikik-api.local}
+      - SETUP_ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
 
       # =======================================================================

@@ -338,6 +338,7 @@
       sqlite: 'SQLite',
       path: '数据库文件路径',
       sqliteHint: '相对路径保存在应用数据目录中；SQLite 适合单实例部署。',
+      mysqlDockerHint: 'Docker 部署请填写容器可访问的地址；内置 MariaDB 栈主机名为 mariadb，默认 SQLite 栈不会启动 MariaDB。',
       host: '主机',
       port: '端口',
       username: '用户名',
@@ -355,6 +356,7 @@
     redis: {
       title: 'Redis 配置',
       description: '连接到您的 Redis 服务器',
+      dockerHint: 'Docker Compose 内置 Redis 的主机名为 redis；localhost 指向应用容器自身。',
       host: '主机',
       port: '端口',
       password: '密码（可选）',
