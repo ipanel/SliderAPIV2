@@ -151,3 +151,6 @@ nul
 /.codex_tmp/
 /outputs/
 /work/
+# Python bytecode caches
+__pycache__/
+*.py[cod]

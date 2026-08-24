@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release
@@ -14,11 +13,13 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout default branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
@@ -31,45 +32,59 @@ jobs:
       - name: Calculate next patch version
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          strict_version='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           git fetch --tags --force
           latest="$(git tag --list | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)"
-          if [[ -n "$latest" ]]; then
-            base="${latest#v}"
-          else
-            base="$(tr -d '\r\n[:space:]' < backend/cmd/server/VERSION)"
-            [[ "$base" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || base="0.0.0"
+          current_version="$(tr -d '\r\n[:space:]' < backend/cmd/server/VERSION)"
+          [[ "$current_version" =~ $strict_version ]] || { echo "backend/cmd/server/VERSION must contain a strict X.Y.Z version." >&2; exit 1; }
+
+          resume=false
+          if [[ -n "$latest" && "$(git rev-list -n 1 "$latest")" == "$(git rev-parse HEAD)" && "${latest#v}" == "$current_version" ]]; then
+            assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${latest}" --jq '.assets[].name' 2>/dev/null || true)"
+            for required in ikik-api-linux-amd64.tar.gz ikik-api-linux-arm64.tar.gz checksums.txt; do
+              if ! grep -Fxq "$required" <<< "$assets"; then
+                resume=true
+                break
+              fi
+            done
           fi
-          IFS=. read -r major minor patch <<< "$base"
-          tag="v${major}.${minor}.$((patch + 1))"
-          git rev-parse "$tag" >/dev/null 2>&1 && { echo "Tag already exists: $tag" >&2; exit 1; }
+
+          if [[ "$resume" == "true" ]]; then
+            tag="$latest"
+          else
+            base="${latest#v}"
+            [[ -n "$base" ]] || base="$current_version"
+            IFS=. read -r major minor patch <<< "$base"
+            tag="v${major}.${minor}.$((patch + 1))"
+            git rev-parse --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1 && { echo "Tag already exists: $tag" >&2; exit 1; }
+          fi
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "resume=$resume" >> "$GITHUB_OUTPUT"
 
-      - name: Update version and create tag
+      - name: Prepare release commit
+        if: steps.version.outputs.resume != 'true'
         shell: bash
         env:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           printf '%s\n' "$VERSION" > backend/cmd/server/VERSION
           git add backend/cmd/server/VERSION
           if ! git diff --cached --quiet; then
             git commit -m "chore: release ${TAG}"
-            git push origin "HEAD:${DEFAULT_BRANCH}"
           fi
-          git fetch --tags --force
-          git rev-parse "$TAG" >/dev/null 2>&1 && { echo "Tag already exists: $TAG" >&2; exit 1; }
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
 
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: pnpm
@@ -80,7 +95,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run build
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -88,20 +103,37 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           mkdir -p release
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit="$(git rev-parse HEAD)"
           for arch in amd64 arm64; do
             stage="release/linux-${arch}"
             mkdir -p "$stage"
-            (cd backend && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags embed -trimpath -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${build_date} -X main.BuildType=release" -o "../${stage}/ikik-api" ./cmd/server)
+            (cd backend && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags embed -trimpath -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${commit} -X main.Date=${build_date} -X main.BuildType=release" -o "../${stage}/ikik-api" ./cmd/server)
             cp -R backend/resources "$stage/resources"
             cp deploy/config.example.yaml "$stage/config.example.yaml"
             tar -C "$stage" -czf "release/ikik-api-linux-${arch}.tar.gz" .
           done
           (cd release && sha256sum ikik-api-linux-amd64.tar.gz ikik-api-linux-arm64.tar.gz > checksums.txt)
+
+      - name: Push release commit and tag
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          RESUME: ${{ steps.version.outputs.resume }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if [[ "$RESUME" == "true" ]]; then
+            [[ "$(git rev-list -n 1 "$TAG")" == "$(git rev-parse HEAD)" ]] || { echo "Resume tag does not point to the checked-out commit." >&2; exit 1; }
+            exit 0
+          fi
+          git rev-parse --verify "refs/tags/${TAG}^{commit}" >/dev/null 2>&1 && { echo "Tag already exists: $TAG" >&2; exit 1; }
+          git tag -a "$TAG" -m "Release $TAG"
+          git push --atomic origin "HEAD:refs/heads/${DEFAULT_BRANCH}" "refs/tags/${TAG}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -109,6 +141,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
+          overwrite_files: true
           files: |
             release/ikik-api-linux-amd64.tar.gz
             release/ikik-api-linux-arm64.tar.gz
@@ -116,7 +149,9 @@ jobs:
 
   ghcr:
     needs: release
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/ghcr.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
-    secrets: inherit

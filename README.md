@@ -1,6 +1,6 @@
 # ikik-api
 
-![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7+-DC382D?logo=redis&logoColor=white)
@@ -42,7 +42,7 @@ Please read the following carefully before deploying or operating this project:
 
 ## Version 1.0.3 Updates
 
-- Upgraded the backend toolchain to Go 1.26.5 and refreshed vulnerable AWS SDK dependencies used by storage integrations.
+- Upgraded the backend toolchain to Go 1.27.0 and refreshed vulnerable AWS SDK dependencies used by storage integrations.
 - Added Grok OAuth integration, Kiro OAuth integration, K12 account-level support, and video-related gateway endpoint coverage.
 - Added free-model provider onboarding, multi-group API key routing, and API Key IP access-control support.
 - Improved carpool pool, private account, subscription, billing, reasoning-token, and usage-stat workflows.
@@ -50,7 +50,7 @@ Please read the following carefully before deploying or operating this project:
 
 ## Tech Stack
 
-- Backend: Go 1.26.5, Gin, Ent, PostgreSQL, Redis
+- Backend: Go 1.27.0, Gin, Ent, PostgreSQL, Redis
 - Frontend: Vue 3, TypeScript, Vite, Pinia, Tailwind CSS
 - Testing: Go test, Vitest, vue-tsc, ESLint
 - Deployment: Docker or source build, with external PostgreSQL and Redis recommended
@@ -70,7 +70,7 @@ Please read the following carefully before deploying or operating this project:
 
 ## Requirements
 
-- Go 1.26.5
+- Go 1.27.0
 - Node.js 20+
 - pnpm 9+
 - PostgreSQL

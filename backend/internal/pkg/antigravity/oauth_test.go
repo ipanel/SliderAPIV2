@@ -13,18 +13,30 @@ import (
 	"time"
 )
 
+const (
+	testAntigravityOAuthClientID     = "test-antigravity-oauth-client-id"
+	testAntigravityOAuthClientSecret = "test-antigravity-oauth-client-secret"
+)
+
+func setAntigravityOAuthEnv(t *testing.T, clientID, clientSecret string) {
+	t.Helper()
+
+	oldClientID, oldClientSecret := ClientID, defaultClientSecret
+	t.Setenv(AntigravityOAuthClientIDEnv, clientID)
+	t.Setenv(AntigravityOAuthClientSecretEnv, clientSecret)
+	ClientID = os.Getenv(AntigravityOAuthClientIDEnv)
+	defaultClientSecret = os.Getenv(AntigravityOAuthClientSecretEnv)
+	t.Cleanup(func() {
+		ClientID, defaultClientSecret = oldClientID, oldClientSecret
+	})
+}
+
 // ---------------------------------------------------------------------------
 // getClientSecret
 // ---------------------------------------------------------------------------
 
 func TestGetClientSecret_环境变量设置(t *testing.T) {
-	old := defaultClientSecret
-	defaultClientSecret = ""
-	t.Cleanup(func() { defaultClientSecret = old })
-	t.Setenv(AntigravityOAuthClientSecretEnv, "my-secret-value")
-
-	// 需要重新触发 init 逻辑：手动从环境变量读取
-	defaultClientSecret = os.Getenv(AntigravityOAuthClientSecretEnv)
+	setAntigravityOAuthEnv(t, "", "my-secret-value")
 
 	secret, err := getClientSecret()
 	if err != nil {
@@ -36,9 +48,7 @@ func TestGetClientSecret_环境变量设置(t *testing.T) {
 }
 
 func TestGetClientSecret_环境变量为空(t *testing.T) {
-	old := defaultClientSecret
-	defaultClientSecret = ""
-	t.Cleanup(func() { defaultClientSecret = old })
+	setAntigravityOAuthEnv(t, "", "")
 
 	_, err := getClientSecret()
 	if err == nil {
@@ -50,20 +60,19 @@ func TestGetClientSecret_环境变量为空(t *testing.T) {
 }
 
 func TestGetClientSecret_环境变量未设置(t *testing.T) {
-	old := defaultClientSecret
-	defaultClientSecret = ""
-	t.Cleanup(func() { defaultClientSecret = old })
+	setAntigravityOAuthEnv(t, "", "")
 
 	_, err := getClientSecret()
 	if err == nil {
 		t.Fatal("defaultClientSecret 为空时应返回错误")
 	}
+	if !strings.Contains(err.Error(), AntigravityOAuthClientSecretEnv) {
+		t.Errorf("error should mention %s: %v", AntigravityOAuthClientSecretEnv, err)
+	}
 }
 
 func TestGetClientSecret_环境变量含空格(t *testing.T) {
-	old := defaultClientSecret
-	defaultClientSecret = "   "
-	t.Cleanup(func() { defaultClientSecret = old })
+	setAntigravityOAuthEnv(t, "", "   ")
 
 	_, err := getClientSecret()
 	if err == nil {
@@ -72,9 +81,7 @@ func TestGetClientSecret_环境变量含空格(t *testing.T) {
 }
 
 func TestGetClientSecret_环境变量有前后空格(t *testing.T) {
-	old := defaultClientSecret
-	defaultClientSecret = "  valid-secret  "
-	t.Cleanup(func() { defaultClientSecret = old })
+	setAntigravityOAuthEnv(t, "", "  valid-secret  ")
 
 	secret, err := getClientSecret()
 	if err != nil {
@@ -592,6 +599,8 @@ func TestGenerateCodeChallenge_不同输入不同输出(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuildAuthorizationURL_参数验证(t *testing.T) {
+	setAntigravityOAuthEnv(t, testAntigravityOAuthClientID, testAntigravityOAuthClientSecret)
+
 	state := "test-state-123"
 	codeChallenge := "test-challenge-abc"
 
@@ -632,6 +641,8 @@ func TestBuildAuthorizationURL_参数验证(t *testing.T) {
 }
 
 func TestBuildAuthorizationURL_参数数量(t *testing.T) {
+	setAntigravityOAuthEnv(t, testAntigravityOAuthClientID, testAntigravityOAuthClientSecret)
+
 	authURL := BuildAuthorizationURL("s", "c")
 	parsed, err := url.Parse(authURL)
 	if err != nil {
@@ -647,6 +658,8 @@ func TestBuildAuthorizationURL_参数数量(t *testing.T) {
 }
 
 func TestBuildAuthorizationURL_特殊字符编码(t *testing.T) {
+	setAntigravityOAuthEnv(t, testAntigravityOAuthClientID, testAntigravityOAuthClientSecret)
+
 	state := "state+with/special=chars"
 	codeChallenge := "challenge+value"
 
@@ -677,14 +690,16 @@ func TestConstants_值正确(t *testing.T) {
 	if UserInfoURL != "https://www.googleapis.com/oauth2/v2/userinfo" {
 		t.Errorf("UserInfoURL 不匹配: got %s", UserInfoURL)
 	}
-	oldClientID, oldSecret := ClientID, defaultClientSecret
-	ClientID, defaultClientSecret = "", ""
-	t.Cleanup(func() { ClientID, defaultClientSecret = oldClientID, oldSecret })
+	setAntigravityOAuthEnv(t, "", "")
 	if _, err := getClientID(); err == nil {
-		t.Fatal("??? client_id ??????")
+		t.Fatal("missing client_id should return an error")
+	} else if !strings.Contains(err.Error(), AntigravityOAuthClientIDEnv) {
+		t.Errorf("client_id error should mention %s: %v", AntigravityOAuthClientIDEnv, err)
 	}
 	if _, err := getClientSecret(); err == nil {
-		t.Fatal("??? client_secret ??????")
+		t.Fatal("missing client_secret should return an error")
+	} else if !strings.Contains(err.Error(), AntigravityOAuthClientSecretEnv) {
+		t.Errorf("client_secret error should mention %s: %v", AntigravityOAuthClientSecretEnv, err)
 	}
 	if RedirectURI != "http://localhost:8085/callback" {
 		t.Errorf("RedirectURI 不匹配: got %s", RedirectURI)

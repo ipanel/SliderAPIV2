@@ -696,18 +696,15 @@ func TestEffectiveOAuthConfig_WhitespaceTriming(t *testing.T) {
 }
 
 func TestEffectiveOAuthConfig_NoEnvSecret(t *testing.T) {
-	t.Setenv(GeminiCLIOAuthClientIDEnv, "test-built-in-client-id")
-	t.Setenv(GeminiCLIOAuthClientSecretEnv, "test-built-in-secret")
+	t.Setenv(GeminiCLIOAuthClientIDEnv, "test-gemini-cli-oauth-client-id")
+	t.Setenv(GeminiCLIOAuthClientSecretEnv, "")
 
-	cfg, err := EffectiveOAuthConfig(OAuthConfig{}, "code_assist")
-	if err != nil {
-		t.Fatalf("不设置环境变量时应回退到内置 secret，实际报错: %v", err)
+	_, err := EffectiveOAuthConfig(OAuthConfig{}, "code_assist")
+	if err == nil {
+		t.Fatal("missing Gemini CLI OAuth client_secret should return an error")
 	}
-	if strings.TrimSpace(cfg.ClientSecret) == "" {
-		t.Error("ClientSecret 不应为空")
-	}
-	if cfg.ClientID != os.Getenv(GeminiCLIOAuthClientIDEnv) {
-		t.Errorf("ClientID 应回退为内置客户端 ID，实际: %q", cfg.ClientID)
+	if !strings.Contains(err.Error(), GeminiCLIOAuthClientSecretEnv) {
+		t.Errorf("error should mention %s: %v", GeminiCLIOAuthClientSecretEnv, err)
 	}
 }
 

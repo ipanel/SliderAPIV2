@@ -1,6 +1,6 @@
 # ikik-api
 
-![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7+-DC382D?logo=redis&logoColor=white)
@@ -42,7 +42,7 @@ QQ グループ：`146499741`
 
 ## 1.0.3 更新内容
 
-- バックエンドツールチェーンを Go 1.26.5 に更新し、ストレージ連携で利用する AWS SDK の脆弱性対応依存関係を更新。
+- バックエンドツールチェーンを Go 1.27.0 に更新し、ストレージ連携で利用する AWS SDK の脆弱性対応依存関係を更新。
 - Grok OAuth、Kiro OAuth、K12 アカウントレベル対応を追加し、動画関連ゲートウェイエンドポイントを補強。
 - 無料モデルプロバイダー接続、複数グループ API Key ルーティング、API Key IP アクセス制御を追加。
 - 相乗りプール、プライベートアカウント、サブスクリプション、課金、推論 Token、利用統計の処理を改善。
@@ -50,7 +50,7 @@ QQ グループ：`146499741`
 
 ## 技術スタック
 
-- バックエンド：Go 1.26.5、Gin、Ent、PostgreSQL、Redis
+- バックエンド：Go 1.27.0、Gin、Ent、PostgreSQL、Redis
 - フロントエンド：Vue 3、TypeScript、Vite、Pinia、Tailwind CSS
 - テスト：Go test、Vitest、vue-tsc、ESLint
 - デプロイ：Docker またはソースビルド。外部 PostgreSQL と Redis の利用を推奨
@@ -70,7 +70,7 @@ QQ グループ：`146499741`
 
 ## 要件
 
-- Go 1.26.5
+- Go 1.27.0
 - Node.js 20+
 - pnpm 9+
 - PostgreSQL

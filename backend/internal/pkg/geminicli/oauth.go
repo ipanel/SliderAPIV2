@@ -155,6 +155,13 @@ func base64URLEncode(data []byte) string {
 // Note: The built-in Gemini CLI OAuth client is restricted and may reject some scopes (e.g.
 // https://www.googleapis.com/auth/generative-language), which will surface as
 // "restricted_client" / "Unregistered scope(s)" errors during browser authorization.
+// IsGeminiCLIClientID reports whether clientID matches the deployment-provided
+// Gemini CLI OAuth client. The client ID itself is intentionally not embedded.
+func IsGeminiCLIClientID(clientID string) bool {
+	builtinClientID := strings.TrimSpace(os.Getenv(GeminiCLIOAuthClientIDEnv))
+	return builtinClientID != "" && strings.TrimSpace(clientID) == builtinClientID
+}
+
 func EffectiveOAuthConfig(cfg OAuthConfig, oauthType string) (OAuthConfig, error) {
 	builtinClientID := strings.TrimSpace(os.Getenv(GeminiCLIOAuthClientIDEnv))
 	builtinClientSecret := strings.TrimSpace(os.Getenv(GeminiCLIOAuthClientSecretEnv))
