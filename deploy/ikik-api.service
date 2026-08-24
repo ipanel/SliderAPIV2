@@ -1,8 +1,8 @@
 [Unit]
 Description=ikik-api - AI API Gateway Platform
 Documentation=https://github.com/ipanel/SliderAPIv2
-After=network.target postgresql.service redis.service
-Wants=postgresql.service redis.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

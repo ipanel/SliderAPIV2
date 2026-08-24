@@ -8,6 +8,13 @@ on:
         required: false
         type: string
         default: ''
+    secrets:
+      GHCR_TOKEN:
+        description: Optional classic PAT with write:packages for an existing unlinked package
+        required: false
+      GHCR_USERNAME:
+        description: Username that owns GHCR_TOKEN; must be configured together with GHCR_TOKEN
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -44,11 +51,23 @@ jobs:
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - name: Validate optional GHCR credentials
+        shell: bash
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$GHCR_USERNAME" && -z "$GHCR_TOKEN" ]] || [[ -z "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]]; then
+            echo "GHCR_USERNAME and GHCR_TOKEN must be configured together." >&2
+            exit 1
+          fi
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || github.token }}
       - name: Build and push multi-platform image
         uses: docker/build-push-action@v6
         with:
@@ -71,12 +90,30 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
           IMAGE: ${{ steps.version.outputs.image }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          git fetch --tags --force
-          latest="$(git tag --list | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)"
-          if [[ "$TAG" != "$latest" ]]; then
-            echo "Skip latest promotion because ${TAG} is not the newest release tag (${latest})."
+          repository="${IMAGE#ghcr.io/}"
+          registry_token="$(
+            curl -fsSL --user "${GHCR_USERNAME}:${GHCR_TOKEN}" --get \
+              --data-urlencode "service=ghcr.io" \
+              --data-urlencode "scope=repository:${repository}:pull" \
+              https://ghcr.io/token | jq -er '.token // .access_token'
+          )"
+          newest_version="$(
+            curl -fsSL \
+              -H "Authorization: Bearer ${registry_token}" \
+              "https://ghcr.io/v2/${repository}/tags/list?n=10000" |
+              jq -r '.tags[]?' |
+              grep -E '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' |
+              sed 's/^v//' |
+              sort -V |
+              tail -n 1
+          )"
+          candidate="${TAG#v}"
+          if [[ -z "$newest_version" || "$candidate" != "$newest_version" ]]; then
+            echo "Skip latest promotion: ${TAG} is older than the newest GHCR version (${newest_version:-unknown})."
             exit 0
           fi
           docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}:${TAG}"

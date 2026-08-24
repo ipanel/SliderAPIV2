@@ -4,6 +4,7 @@ project_name: ikik-api
 
 before:
   hooks:
+    - sh -c "cd frontend && corepack enable && corepack prepare pnpm@9.15.9 --activate && pnpm install --frozen-lockfile && pnpm run build"
     - go mod tidy -C backend
 
 builds:
@@ -60,11 +61,12 @@ dockers:
     goarch: amd64
     skip_push: '{{ if eq .Env.DOCKERHUB_USERNAME "skip" }}true{{ else }}false{{ end }}'
     image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-amd64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
     extra_files:
       - deploy/docker-entrypoint.sh
+      - backend/resources
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.version={{ .Version }}"
@@ -75,11 +77,12 @@ dockers:
     goarch: arm64
     skip_push: '{{ if eq .Env.DOCKERHUB_USERNAME "skip" }}true{{ else }}false{{ end }}'
     image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-arm64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-arm64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
     extra_files:
       - deploy/docker-entrypoint.sh
+      - backend/resources
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.version={{ .Version }}"
@@ -90,11 +93,12 @@ dockers:
     goos: linux
     goarch: amd64
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-amd64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
     extra_files:
       - deploy/docker-entrypoint.sh
+      - backend/resources
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.version={{ .Version }}"
@@ -105,11 +109,12 @@ dockers:
     goos: linux
     goarch: arm64
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-arm64"
     dockerfile: Dockerfile.goreleaser
     use: buildx
     extra_files:
       - deploy/docker-entrypoint.sh
+      - backend/resources
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.version={{ .Version }}"
@@ -119,50 +124,50 @@ dockers:
 # Docker manifests for multi-arch support
 docker_manifests:
   # DockerHub manifests (skipped if DOCKERHUB_USERNAME is 'skip')
-  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}"
+  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}"
     skip_push: '{{ if eq .Env.DOCKERHUB_USERNAME "skip" }}true{{ else }}false{{ end }}'
     image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-arm64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-arm64"
 
-  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:latest"
+  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:latest"
     skip_push: '{{ if eq .Env.DOCKERHUB_USERNAME "skip" }}true{{ else }}false{{ end }}'
     image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-arm64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-arm64"
 
-  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Major }}.{{ .Minor }}"
+  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Major }}.{{ .Minor }}"
     skip_push: '{{ if eq .Env.DOCKERHUB_USERNAME "skip" }}true{{ else }}false{{ end }}'
     image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-arm64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-arm64"
 
-  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Major }}"
+  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Major }}"
     skip_push: '{{ if eq .Env.DOCKERHUB_USERNAME "skip" }}true{{ else }}false{{ end }}'
     image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}-arm64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "{{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}-arm64"
 
   # GHCR manifests (owner must be lowercase)
-  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}"
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-arm64"
 
-  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:latest"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:latest"
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-arm64"
 
-  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Major }}.{{ .Minor }}"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Major }}.{{ .Minor }}"
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-arm64"
 
-  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Major }}"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Major }}"
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}-arm64"
 
 release:
   github:
@@ -187,11 +192,11 @@ release:
     ```bash
     {{ if ne .Env.DOCKERHUB_USERNAME "skip" -}}
     # Docker Hub
-    docker pull {{ .Env.DOCKERHUB_USERNAME }}/ikik-api:{{ .Version }}
+    docker pull {{ .Env.DOCKERHUB_USERNAME }}/sliderapiv2:v{{ .Version }}
 
     {{ end -}}
     # GitHub Container Registry
-    docker pull ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/ikik-api:{{ .Version }}
+    docker pull ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/sliderapiv2:v{{ .Version }}
     ```
 
     **One-line install (Linux):**

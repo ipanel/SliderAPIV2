@@ -1,12 +1,33 @@
 package setup
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
+
+func TestRegisterRoutesIncludesHealth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	RegisterRoutes(router)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/health", nil)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /health status=%d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(recorder.Body.String(), `"mode":"setup"`) {
+		t.Fatalf("GET /health response=%q, want setup mode", recorder.Body.String())
+	}
+}
 
 func TestDecideAdminBootstrap(t *testing.T) {
 	t.Parallel()

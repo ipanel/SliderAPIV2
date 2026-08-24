@@ -30,7 +30,8 @@ RUN addgroup -g 1000 ikik-api && \
 WORKDIR /app
 
 # Copy pre-built binary from GoReleaser
-COPY ikik-api /app/ikik-api
+COPY --chown=ikik-api:ikik-api ikik-api /app/ikik-api
+COPY --chown=ikik-api:ikik-api backend/resources /app/resources
 
 # Create data directory
 RUN mkdir -p /app/data && chown -R ikik-api:ikik-api /app

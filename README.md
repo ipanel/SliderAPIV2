@@ -2,7 +2,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)
+![MariaDB](https://img.shields.io/badge/MariaDB-10.11+-003545?logo=mariadb&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7+-DC382D?logo=redis&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-LGPL--3.0-blue)
@@ -38,7 +38,7 @@ Please read the following carefully before deploying or operating this project:
 - Content moderation and risk-control integration points for request/response auditing.
 - Built-in release workflow for tagged builds, Docker images, archives, and GitHub Releases.
 - Frontend console built with Vue 3, TypeScript, Pinia, Vue Router, Tailwind CSS, and Vite.
-- Backend service built with Go, Gin, Ent, PostgreSQL, Redis, and modular service boundaries.
+- Backend service built with Go, Gin, Ent, MariaDB/SQLite, Redis, and modular service boundaries.
 
 ## Version 1.0.3 Updates
 
@@ -50,10 +50,10 @@ Please read the following carefully before deploying or operating this project:
 
 ## Tech Stack
 
-- Backend: Go 1.27.0, Gin, Ent, PostgreSQL, Redis
+- Backend: Go 1.27.0, Gin, Ent, MariaDB, Redis
 - Frontend: Vue 3, TypeScript, Vite, Pinia, Tailwind CSS
 - Testing: Go test, Vitest, vue-tsc, ESLint
-- Deployment: Docker or source build, with external PostgreSQL and Redis recommended
+- Deployment: Docker or source build, with MariaDB and Redis included in the recommended Compose stack
 
 ## Repository Layout
 
@@ -73,7 +73,7 @@ Please read the following carefully before deploying or operating this project:
 - Go 1.27.0
 - Node.js 20+
 - pnpm 9+
-- PostgreSQL
+- MariaDB 10.11+ (or SQLite for supported non-Compose configurations)
 - Redis
 - Docker, optional but recommended for deployment
 
@@ -88,7 +88,7 @@ cp deploy/config.example.yaml deploy/config.yaml
 Edit the generated configuration for your environment:
 
 - `server`: host, port, frontend URL, request body limits, CORS, and security headers.
-- `database`: PostgreSQL connection settings.
+- `database`: MySQL/MariaDB or SQLite connection settings.
 - `redis`: cache and queue backend settings.
 - `gateway`: upstream timeout, body-size limits, routing, and model behavior.
 - `security`: URL allowlist, response header filtering, proxy fallback, and CSP.
@@ -145,6 +145,17 @@ Build a Docker image:
 docker build -t ikik-api:local .
 ```
 
+## Docker Quick Start
+
+The maintained deployment pulls the multi-platform image `ghcr.io/ipanel/sliderapiv2:latest` and starts ikik-api with MariaDB and Redis:
+
+```bash
+mkdir -p sliderapiv2 && cd sliderapiv2
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
+```
+
+For production, pin `IKIK_API_IMAGE` in `.env` to a release tag such as `ghcr.io/ipanel/sliderapiv2:vX.Y.Z`. See [deploy/README.md](deploy/README.md) for upgrades, external databases, OAuth variables, backup, and 404 troubleshooting.
+
 ## Tests
 
 Run all configured checks:
@@ -200,12 +211,12 @@ Nginx drops headers containing underscores by default. That can break session ro
 
 Recommended production basics:
 
-- Use PostgreSQL and Redis outside the application container.
+- Use the maintained MariaDB and Redis containers, or managed external services.
 - Mount a production config file instead of baking secrets into the image.
 - Terminate TLS at the reverse proxy or load balancer.
 - Keep `/api/*`, `/v1/*`, streaming, and gateway routes out of CDN cache.
 - Configure request body limits consistently across the reverse proxy and backend.
-- Back up PostgreSQL before applying migrations or upgrading the application.
+- Back up MariaDB and `/app/data` before applying migrations or upgrading the application.
 
 ## Security
 

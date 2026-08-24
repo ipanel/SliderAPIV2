@@ -6,13 +6,13 @@
 #
 # Usage:
 #   1. Copy .env.example to .env and configure database/redis connection
-#   2. docker-compose -f docker-compose.standalone.yml up -d
+#   2. docker compose -f docker-compose.standalone.yml up -d
 #   3. Access: http://localhost:8080
 # =============================================================================
 
 services:
   ikik-api:
-    image: ikik-api:latest
+    image: ${IKIK_API_IMAGE:-ghcr.io/ipanel/sliderapiv2:latest}
     container_name: ikik-api
     restart: unless-stopped
     ulimits:
@@ -30,6 +30,7 @@ services:
       # Auto Setup
       # =======================================================================
       - AUTO_SETUP=true
+      - DATA_DIR=/app/data
 
       # =======================================================================
       # Server Configuration
@@ -42,6 +43,7 @@ services:
       # =======================================================================
       # Database Configuration (MariaDB) - Required
       # =======================================================================
+      - DATABASE_DRIVER=mysql
       - DATABASE_HOST=${DATABASE_HOST:?DATABASE_HOST is required}
       - DATABASE_PORT=${DATABASE_PORT:-3306}
       - DATABASE_USER=${DATABASE_USER:-ikik_api}
@@ -76,6 +78,7 @@ services:
       # =======================================================================
       - JWT_SECRET=${JWT_SECRET:-}
       - JWT_EXPIRE_HOUR=${JWT_EXPIRE_HOUR:-24}
+      - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
 
       # =======================================================================
       # Timezone Configuration

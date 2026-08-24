@@ -21,6 +21,11 @@ var installMutex sync.Mutex
 
 // RegisterRoutes registers setup wizard routes
 func RegisterRoutes(r *gin.Engine) {
+	// Keep the container health probe valid while the setup-only server is active.
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "mode": "setup"})
+	})
+
 	setup := r.Group("/setup")
 	{
 		// Status endpoint is always accessible (read-only)

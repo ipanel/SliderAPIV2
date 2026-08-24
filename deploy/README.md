@@ -1,610 +1,282 @@
-# ikik-api Deployment Files
+# ikik-api Deployment Guide
 
-This directory contains files for deploying ikik-api on Linux servers.
+This directory contains the supported deployment entry points for [ipanel/SliderAPIv2](https://github.com/ipanel/SliderAPIv2).
 
-## Deployment Methods
+## Recommended architecture
 
-| Method | Best For | Setup Wizard |
-|--------|----------|--------------|
-| **Docker Compose** | Quick setup, all-in-one | Not needed (auto-setup) |
-| **Binary Install** | Production servers, systemd | Web-based wizard |
+The standard Docker deployment starts three services:
+
+- `ikik-api`: `ghcr.io/ipanel/sliderapiv2`, published for `linux/amd64` and `linux/arm64`
+- `mariadb`: MariaDB 10.11
+- `redis`: Redis 8
+
+The application runs with `AUTO_SETUP=true`. On first startup it connects to MariaDB and Redis, applies migrations, creates the initial administrator, and writes generated configuration/state under `/app/data`. **The application data volume or `./data` directory must be persisted.**
 
 ## Files
 
-| File | Description |
-|------|-------------|
-| `docker-compose.yml` | Docker Compose configuration (named volumes) |
-| `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
-| `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
-| `.env.example` | Docker environment variables template |
-| `DOCKER.md` | Docker Hub documentation |
-| `install.sh` | One-click binary installation script |
-| `install-datamanagementd.sh` | datamanagementd 涓€閿畨瑁呰剼鏈?|
-| `ikik-api.service` | Systemd service unit file |
-| `ikik-api-datamanagementd.service` | datamanagementd systemd service unit file |
-| `DATAMANAGEMENTD_CN.md` | datamanagementd 閮ㄧ讲涓庤仈鍔ㄨ鏄庯紙涓枃锛?|
-| `config.example.yaml` | Example configuration file |
+| File | Purpose |
+|---|---|
+| `docker-compose.local.yml` | Recommended deployment with bind-mounted local data directories |
+| `docker-compose.yml` | Deployment with Docker named volumes |
+| `docker-compose.standalone.yml` | Application only; use external MariaDB and Redis |
+| `docker-compose.dev.yml` | Build the image from the current local source tree |
+| `.env.example` | Environment variable template |
+| `docker-deploy.sh` | Installs or updates templates, generates secrets only on first install, pulls images, and starts the stack |
+| `DOCKER.md` | Image-oriented deployment reference |
+| `install.sh` | Linux binary/systemd installer |
 
----
+## One-click Docker deployment
 
-## Docker Deployment (Recommended)
+Requirements: Docker Engine with Docker Compose v2, OpenSSL, and either curl or wget.
 
-### Method 1: One-Click Deployment (Recommended)
-
-Use the automated preparation script for the easiest setup:
+Run the installer in a new empty directory:
 
 ```bash
-# Download and run the preparation script
-curl -sSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
-
-# Or download first, then run
-curl -sSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh -o docker-deploy.sh
-chmod +x docker-deploy.sh
-./docker-deploy.sh
+mkdir -p sliderapiv2 && cd sliderapiv2
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
 ```
 
-**What the script does:**
-- Downloads `docker-compose.local.yml` and `.env.example`
-- Automatically generates secure secrets (JWT_SECRET, TOTP_ENCRYPTION_KEY, POSTGRES_PASSWORD)
-- Creates `.env` file with generated secrets
-- Creates necessary data directories (data/, postgres_data/, redis_data/)
-- **Displays generated credentials** (POSTGRES_PASSWORD, JWT_SECRET, etc.)
+The script:
 
-**After running the script:**
+1. downloads `docker-compose.local.yml` as `docker-compose.yml`;
+2. downloads the current `.env.example`;
+3. on a first install, creates `.env` and generates separate MariaDB root, MariaDB application, Redis, JWT, and TOTP secrets;
+4. on an existing deployment, updates the templates but preserves `.env` and every persisted credential;
+5. creates `data/`, `mariadb_data/`, and `redis_data/`;
+6. pulls the GHCR image and starts the complete stack.
+
+It does not print generated secrets. Back up `.env` securely together with the data directories. If persistent data exists but `.env` is missing, the script refuses to generate replacement credentials. A legacy deployment without the required MariaDB settings must be migrated explicitly instead of being overwritten.
+
+For a non-interactive template update after taking a backup, pass `--yes`: `curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash -s -- --yes`. Existing `.env` values are still preserved.
+
+Check the deployment:
+
 ```bash
-# Start services
-docker compose -f docker-compose.local.yml up -d
-
-# View logs
-docker compose -f docker-compose.local.yml logs -f ikik-api
-
-# If admin password was auto-generated, find it in logs:
-docker compose -f docker-compose.local.yml logs ikik-api | grep "admin password"
-
-# Access Web UI
-# http://localhost:8080
+docker compose ps
+docker compose logs -f ikik-api
+curl -f http://127.0.0.1:8080/health
 ```
 
-### Method 2: Manual Deployment
+If `ADMIN_PASSWORD` was left empty, the initial password is written to the first-start application log. Store it immediately and change it after signing in.
 
-If you prefer manual control:
+## Manual Docker deployment
 
 ```bash
-# Clone repository
 git clone https://github.com/ipanel/SliderAPIv2.git
-cd ikik-api/deploy
-
-# Configure environment
+cd SliderAPIv2/deploy
 cp .env.example .env
-nano .env  # Set POSTGRES_PASSWORD and other required variables
-
-# Generate secure secrets (recommended)
-JWT_SECRET=$(openssl rand -hex 32)
-TOTP_ENCRYPTION_KEY=$(openssl rand -hex 32)
-echo "JWT_SECRET=${JWT_SECRET}" >> .env
-echo "TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}" >> .env
-
-# Create data directories
-mkdir -p data postgres_data redis_data
-
-# Start all services using local directory version
-docker compose -f docker-compose.local.yml up -d
-
-# View logs (check for auto-generated admin password)
-docker compose -f docker-compose.local.yml logs -f ikik-api
-
-# Access Web UI
-# http://localhost:8080
 ```
 
-### Deployment Version Comparison
+Edit `.env` and set at least these values:
 
-| Version | Data Storage | Migration | Best For |
-|---------|-------------|-----------|----------|
-| **docker-compose.local.yml** | Local directories (./data, ./postgres_data, ./redis_data) | 鉁?Easy (tar entire directory) | Production, need frequent backups/migration |
-| **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/) | 鈿狅笍 Requires docker commands | Simple setup, don't need migration |
-
-**Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
-
-### How Auto-Setup Works
-
-When using Docker Compose with `AUTO_SETUP=true`:
-
-1. On first run, the system automatically:
-   - Connects to PostgreSQL and Redis
-   - Applies database migrations (SQL files in `backend/migrations/*.sql`) and records them in `schema_migrations`
-   - Generates JWT secret (if not provided)
-   - Creates admin account (password auto-generated if not provided)
-   - Writes config.yaml
-
-2. No manual Setup Wizard needed - just configure `.env` and start
-
-3. If `ADMIN_PASSWORD` is not set, check logs for the generated password:
-   ```bash
-   docker compose logs ikik-api | grep "admin password"
-   ```
-
-### Database Migration Notes (PostgreSQL)
-
-- Migrations are applied in lexicographic order (e.g. `001_...sql`, `002_...sql`).
-- `schema_migrations` tracks applied migrations (filename + checksum).
-- Migrations are forward-only; rollback requires a DB backup restore or a manual compensating SQL script.
-
-**Verify `users.allowed_groups` 鈫?`user_allowed_groups` backfill**
-
-During the incremental GORM鈫扙nt migration, `users.allowed_groups` (legacy `BIGINT[]`) is being replaced by a normalized join table `user_allowed_groups(user_id, group_id)`.
-
-Run this query to compare the legacy data vs the join table:
-
-```sql
-WITH old_pairs AS (
-  SELECT DISTINCT u.id AS user_id, x.group_id
-  FROM users u
-  CROSS JOIN LATERAL unnest(u.allowed_groups) AS x(group_id)
-  WHERE u.allowed_groups IS NOT NULL
-)
-SELECT
-  (SELECT COUNT(*) FROM old_pairs)           AS old_pair_count,
-  (SELECT COUNT(*) FROM user_allowed_groups) AS new_pair_count;
+```dotenv
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:latest
+MARIADB_ROOT_PASSWORD=<strong-random-value>
+MARIADB_PASSWORD=<strong-random-value>
+REDIS_PASSWORD=<strong-random-value>
+JWT_SECRET=<64-hex-characters>
+TOTP_ENCRYPTION_KEY=<64-hex-characters>
 ```
 
-### datamanagementd锛堟暟鎹鐞嗭級鑱斿姩
-
-濡傞渶鍚敤绠＄悊鍚庡彴鈥滄暟鎹鐞嗏€濆姛鑳斤紝璇烽澶栭儴缃插涓绘満 `datamanagementd`锛?
-- 涓昏繘绋嬪浐瀹氭帰娴?`/tmp/ikik-api-datamanagement.sock`
-- Docker 鍦烘櫙涓嬮渶鎶婂涓绘満 Socket 鎸傝浇鍒板鍣ㄥ唴鍚岃矾寰?- 璇︾粏姝ラ瑙侊細`deploy/DATAMANAGEMENTD_CN.md`
-
-
-### Commands
-
-For **local directory version** (docker-compose.local.yml):
+Then start the local-directory stack:
 
 ```bash
-# Start services
-docker compose -f docker-compose.local.yml up -d
-
-# Stop services
-docker compose -f docker-compose.local.yml down
-
-# View logs
-docker compose -f docker-compose.local.yml logs -f ikik-api
-
-# Restart ikik-api only
-docker compose -f docker-compose.local.yml restart ikik-api
-
-# Update to latest version
+mkdir -p data mariadb_data redis_data
 docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
-
-# Remove all data (caution!)
-docker compose -f docker-compose.local.yml down
-rm -rf data/ postgres_data/ redis_data/
+docker compose -f docker-compose.local.yml ps
 ```
 
-For **named volumes version** (docker-compose.yml):
+For Docker named volumes, use `docker-compose.yml` instead.
+
+## Image versions and upgrades
+
+The default image is:
+
+```text
+ghcr.io/ipanel/sliderapiv2:latest
+```
+
+For reproducible production deployments, pin a release in `.env`:
+
+```dotenv
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:vX.Y.Z
+```
+
+Upgrade a deployment with:
 
 ```bash
-# Start services
-docker compose up -d
-
-# Stop services
-docker compose down
-
-# View logs
-docker compose logs -f ikik-api
-
-# Restart ikik-api only
-docker compose restart ikik-api
-
-# Update to latest version
 docker compose pull
 docker compose up -d
-
-# Remove all data (caution!)
-docker compose down -v
+docker image prune -f
 ```
 
-### Environment Variables
+Roll back by restoring the database/data backup, setting `IKIK_API_IMAGE` to the previous `vX.Y.Z`, and running `docker compose up -d` again. Database migrations may not be backward compatible, so do not roll back only the container image after a schema-changing release.
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `POSTGRES_PASSWORD` | **Yes** | - | PostgreSQL password |
-| `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
-| `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
-| `SERVER_PORT` | No | `8080` | Server port |
-| `ADMIN_EMAIL` | No | `admin@ikik-api.local` | Admin email |
-| `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
-| `TZ` | No | `Asia/Shanghai` | Timezone |
-| `GEMINI_OAUTH_CLIENT_ID` | No | *(builtin)* | Google OAuth client ID (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
-| `GEMINI_OAUTH_CLIENT_SECRET` | No | *(builtin)* | Google OAuth client secret (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
-| `GEMINI_OAUTH_SCOPES` | No | *(default)* | OAuth scopes (Gemini OAuth) |
-| `GEMINI_QUOTA_POLICY` | No | *(empty)* | JSON overrides for Gemini local quota simulation (Code Assist only). |
-
-See `.env.example` for all available options.
-
-> **Note:** The `docker-deploy.sh` script automatically generates `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, and `POSTGRES_PASSWORD` for you.
-
-### Easy Migration (Local Directory Version)
-
-When using `docker-compose.local.yml`, all data is stored in local directories, making migration simple:
+If GHCR returns `denied` while pulling, authenticate with an account/token that has `read:packages` permission:
 
 ```bash
-# On source server: Stop services and create archive
-cd /path/to/deployment
-docker compose -f docker-compose.local.yml down
-cd ..
-tar czf ikik-api-complete.tar.gz deployment/
-
-# Transfer to new server
-scp ikik-api-complete.tar.gz user@new-server:/path/to/destination/
-
-# On new server: Extract and start
-tar xzf ikik-api-complete.tar.gz
-cd deployment/
-docker compose -f docker-compose.local.yml up -d
+echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 ```
 
-Your entire deployment (configuration + data) is migrated!
+If GitHub Actions fails while publishing with `permission_denied: write_package`, grant `ipanel/SliderAPIv2` **Write** access in the existing `sliderapiv2` package's **Manage Actions access** settings. Alternatively, configure repository secrets `GHCR_TOKEN` (classic PAT with `write:packages` and `read:packages`) and `GHCR_USERNAME`; the workflow requires both secrets to be configured together; when both are absent it uses the repository `GITHUB_TOKEN`. Never store these credentials in `.env` or source files.
 
----
+## Data and backup
 
-## Gemini OAuth Configuration
+Local-directory deployment paths:
 
-ikik-api supports three methods to connect to Gemini:
+```text
+data/           application config, installation marker, logs, and local state
+mariadb_data/   MariaDB data
+redis_data/     Redis persistence
+.env            secrets and deployment configuration
+```
 
-### Method 1: Code Assist OAuth (Recommended for GCP Users)
-
-**No configuration needed** - always uses the built-in Gemini CLI OAuth client (public).
-
-1. Leave `GEMINI_OAUTH_CLIENT_ID` and `GEMINI_OAUTH_CLIENT_SECRET` empty
-2. In the Admin UI, create a Gemini OAuth account and select **"Code Assist"** type
-3. Complete the OAuth flow in your browser
-
-> Note: Even if you configure `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET` for AI Studio OAuth,
-> Code Assist OAuth will still use the built-in Gemini CLI client.
-
-**Requirements:**
-- Google account with access to Google Cloud Platform
-- A GCP project (auto-detected or manually specified)
-
-**How to get Project ID (if auto-detection fails):**
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Click the project dropdown at the top of the page
-3. Copy the Project ID (not the project name) from the list
-4. Common formats: `my-project-123456` or `cloud-ai-companion-xxxxx`
-
-### Method 2: AI Studio OAuth (For Regular Google Accounts)
-
-Requires your own OAuth client credentials.
-
-**Step 1: Create OAuth Client in Google Cloud Console**
-
-1. Go to [Google Cloud Console - Credentials](https://console.cloud.google.com/apis/credentials)
-2. Create a new project or select an existing one
-3. **Enable the Generative Language API:**
-   - Go to "APIs & Services" 鈫?"Library"
-   - Search for "Generative Language API"
-   - Click "Enable"
-4. **Configure OAuth Consent Screen** (if not done):
-   - Go to "APIs & Services" 鈫?"OAuth consent screen"
-   - Choose "External" user type
-   - Fill in app name, user support email, developer contact
-   - Add scopes: `https://www.googleapis.com/auth/generative-language.retriever` (and optionally `https://www.googleapis.com/auth/cloud-platform`)
-   - Add test users (your Google account email)
-5. **Create OAuth 2.0 credentials:**
-   - Go to "APIs & Services" 鈫?"Credentials"
-   - Click "Create Credentials" 鈫?"OAuth client ID"
-   - Application type: **Web application** (or **Desktop app**)
-   - Name: e.g., "ikik-api Gemini"
-   - Authorized redirect URIs: Add `http://localhost:1455/auth/callback`
-6. Copy the **Client ID** and **Client Secret**
-7. **鈿狅笍 Publish to Production (IMPORTANT):**
-   - Go to "APIs & Services" 鈫?"OAuth consent screen"
-   - Click "PUBLISH APP" to move from Testing to Production
-   - **Testing mode limitations:**
-     - Only manually added test users can authenticate (max 100 users)
-     - Refresh tokens expire after 7 days
-     - Users must be re-added periodically
-   - **Production mode:** Any Google user can authenticate, tokens don't expire
-   - Note: For sensitive scopes, Google may require verification (demo video, privacy policy)
-
-**Step 2: Configure Environment Variables**
+Stop writers before a consistent file-level backup:
 
 ```bash
-GEMINI_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GEMINI_OAUTH_CLIENT_SECRET=example-oauth-client-secret
-
-# 鍙€夛細濡傞渶浣跨敤 Gemini CLI 鍐呯疆 OAuth Client锛圕ode Assist / Google One锛?# 瀹夊叏璇存槑锛氭湰浠撳簱涓嶄細鍐呯疆璇?client_secret锛岃鍦ㄨ繍琛岀幆澧冮€氳繃鐜鍙橀噺娉ㄥ叆銆?# GEMINI_CLI_OAUTH_CLIENT_SECRET=example-built-in-oauth-secret
+docker compose down
+tar -czf sliderapiv2-backup.tar.gz .env data mariadb_data redis_data docker-compose.yml
+docker compose up -d
 ```
 
-**Step 3: Create Account in Admin UI**
+For larger production systems, use native MariaDB backup tools and test restoration regularly.
 
-1. Create a Gemini OAuth account and select **"AI Studio"** type
-2. Complete the OAuth flow
-   - After consent, your browser will be redirected to `http://localhost:1455/auth/callback?code=...&state=...`
-   - Copy the full callback URL (recommended) or just the `code` and paste it back into the Admin UI
+## External MariaDB and Redis
 
-### Method 3: API Key (Simplest)
+Use `docker-compose.standalone.yml` when the database and cache are managed outside the stack. Configure:
 
-1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Click "Create API key"
-3. In Admin UI, create a Gemini **API Key** account
-4. Paste your API key (starts with `AIza...`)
+```dotenv
+DATABASE_HOST=db.example.com
+DATABASE_PORT=3306
+DATABASE_USER=ikik_api
+DATABASE_PASSWORD=<database-password>
+DATABASE_DBNAME=ikik_api
+DATABASE_SSLMODE=disable
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+REDIS_PASSWORD=<redis-password>
+```
 
-### Comparison Table
-
-| Feature | Code Assist OAuth | AI Studio OAuth | API Key |
-|---------|-------------------|-----------------|---------|
-| Setup Complexity | Easy (no config) | Medium (OAuth client) | Easy |
-| GCP Project Required | Yes | No | No |
-| Custom OAuth Client | No (built-in) | Yes (required) | N/A |
-| Rate Limits | GCP quota | Standard | Standard |
-| Best For | GCP developers | Regular users needing OAuth | Quick testing |
-
----
-
-## Binary Installation
-
-For production servers using systemd.
-
-### One-Line Installation
+Start it with:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/install.sh | sudo bash
+docker compose -f docker-compose.standalone.yml pull
+docker compose -f docker-compose.standalone.yml up -d
 ```
 
-### Manual Installation
+`host.docker.internal` is available through `host-gateway` if the external service runs on the Docker host. Prefer an actual host name or private network address in production.
 
-1. Download the latest release from [GitHub Releases](https://github.com/ipanel/SliderAPIv2/releases)
-2. Extract and copy the binary to `/opt/ikik-api/`
-3. Copy `ikik-api.service` to `/etc/systemd/system/`
-4. Run:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable ikik-api
-   sudo systemctl start ikik-api
-   ```
-5. Open the Setup Wizard in your browser to complete configuration
+## OAuth credentials
 
-### Commands
+No Google OAuth Client ID or Client Secret is embedded in the source code or image.
+
+Set only the credentials required for the login flow you use:
+
+```dotenv
+# Custom Gemini AI Studio OAuth client
+GEMINI_OAUTH_CLIENT_ID=
+GEMINI_OAUTH_CLIENT_SECRET=
+
+# Gemini CLI / Code Assist OAuth client
+GEMINI_CLI_OAUTH_CLIENT_ID=
+GEMINI_CLI_OAUTH_CLIENT_SECRET=
+
+# Antigravity OAuth client
+ANTIGRAVITY_OAUTH_CLIENT_ID=
+ANTIGRAVITY_OAUTH_CLIENT_SECRET=
+```
+
+Leaving a pair empty disables that credential-dependent flow; it no longer falls back to a credential embedded in the repository.
+
+## Reverse proxy
+
+Terminate TLS at Nginx, Caddy, or a load balancer. Do not cache `/api/*`, `/v1/*`, streaming responses, or gateway routes. When using Nginx, preserve streaming and headers required by clients; projects using underscore headers commonly need this in the `http` block:
+
+```nginx
+underscores_in_headers on;
+```
+
+## Operations
 
 ```bash
-# Install
-sudo ./install.sh
+# Status
+docker compose ps
 
-# Upgrade
-sudo ./install.sh upgrade
+# Application logs
+docker compose logs --tail=200 -f ikik-api
 
-# Uninstall
-sudo ./install.sh uninstall
+# MariaDB health
+docker compose exec mariadb healthcheck.sh --connect --innodb_initialized
+
+# Redis health (REDISCLI_AUTH is already injected into the container)
+docker compose exec redis redis-cli ping
+
+# Restart only the application
+docker compose restart ikik-api
+
+# Stop without deleting data
+docker compose down
 ```
 
-### Service Management
-
-```bash
-# Start the service
-sudo systemctl start ikik-api
-
-# Stop the service
-sudo systemctl stop ikik-api
-
-# Restart the service
-sudo systemctl restart ikik-api
-
-# Check status
-sudo systemctl status ikik-api
-
-# View logs
-sudo journalctl -u ikik-api -f
-
-# Enable auto-start on boot
-sudo systemctl enable ikik-api
-```
-
-### Configuration
-
-#### Server Address and Port
-
-During installation, you will be prompted to configure the server listen address and port. These settings are stored in the systemd service file as environment variables.
-
-To change after installation:
-
-1. Edit the systemd service:
-   ```bash
-   sudo systemctl edit ikik-api
-   ```
-
-2. Add or modify:
-   ```ini
-   [Service]
-   Environment=SERVER_HOST=0.0.0.0
-   Environment=SERVER_PORT=3000
-   ```
-
-3. Reload and restart:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl restart ikik-api
-   ```
-
-#### Gemini OAuth Configuration
-
-If you need to use AI Studio OAuth for Gemini accounts, add the OAuth client credentials to the systemd service file:
-
-1. Edit the service file:
-   ```bash
-   sudo nano /etc/systemd/system/ikik-api.service
-   ```
-
-2. Add your OAuth credentials in the `[Service]` section (after the existing `Environment=` lines):
-   ```ini
-   Environment=GEMINI_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   Environment=GEMINI_OAUTH_CLIENT_SECRET=example-oauth-client-secret
-   ```
-
-   濡傞渶浣跨敤鈥滃唴缃?Gemini CLI OAuth Client鈥濓紙Code Assist / Google One锛夛紝杩橀渶瑕佹敞鍏ワ細
-   ```ini
-   Environment=GEMINI_CLI_OAUTH_CLIENT_SECRET=example-built-in-oauth-secret
-   ```
-
-3. Reload and restart:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl restart ikik-api
-   ```
-
-> **Note:** Code Assist OAuth does not require any configuration - it uses the built-in Gemini CLI client.
-> See the [Gemini OAuth Configuration](#gemini-oauth-configuration) section above for detailed setup instructions.
-
-#### Application Configuration
-
-The main config file is at `/etc/ikik-api/config.yaml` (created by Setup Wizard).
-
-### Prerequisites
-
-- Linux server (Ubuntu 20.04+, Debian 11+, CentOS 8+, etc.)
-- PostgreSQL 14+
-- Redis 6+
-- systemd
-
-### Directory Structure
-
-```
-/opt/ikik-api/
-鈹溾攢鈹€ ikik-api              # Main binary
-鈹溾攢鈹€ ikik-api.backup       # Backup (after upgrade)
-鈹斺攢鈹€ data/                # Runtime data
-
-/etc/ikik-api/
-鈹斺攢鈹€ config.yaml          # Configuration file
-```
-
----
+Never use `docker compose down -v` unless you intentionally want to delete named volumes.
 
 ## Troubleshooting
 
-### Docker
+### `/api/v1/settings/public` or admin dashboard routes return 404
 
-For **local directory version**:
+Both routes are part of the normal application router. A 404 immediately after deployment usually means the process is still serving the setup-only router because automatic initialization did not complete.
 
-```bash
-# Check container status
-docker compose -f docker-compose.local.yml ps
-
-# View detailed logs
-docker compose -f docker-compose.local.yml logs --tail=100 ikik-api
-
-# Check database connection
-docker compose -f docker-compose.local.yml exec postgres pg_isready
-
-# Check Redis connection
-docker compose -f docker-compose.local.yml exec redis redis-cli ping
-
-# Restart all services
-docker compose -f docker-compose.local.yml restart
-
-# Check data directories
-ls -la data/ postgres_data/ redis_data/
-```
-
-For **named volumes version**:
+Check:
 
 ```bash
-# Check container status
 docker compose ps
-
-# View detailed logs
-docker compose logs --tail=100 ikik-api
-
-# Check database connection
-docker compose exec postgres pg_isready
-
-# Check Redis connection
-docker compose exec redis redis-cli ping
-
-# Restart all services
-docker compose restart
+docker compose logs --tail=300 ikik-api
+docker compose logs --tail=200 mariadb
+docker compose logs --tail=200 redis
 ```
 
-### Binary Install
+Confirm all of the following:
+
+- `AUTO_SETUP=true` is present in the application container;
+- MariaDB and Redis are healthy and credentials match `.env`;
+- `/app/data` is writable and persistent;
+- the startup log reports successful migrations and server initialization.
+
+After correcting the dependency or credential issue:
 
 ```bash
-# Check service status
-sudo systemctl status ikik-api
-
-# View recent logs
-sudo journalctl -u ikik-api -n 50
-
-# Check config file
-sudo cat /etc/ikik-api/config.yaml
-
-# Check PostgreSQL
-sudo systemctl status postgresql
-
-# Check Redis
-sudo systemctl status redis
+docker compose restart ikik-api
+curl -f http://127.0.0.1:8080/health
 ```
 
-### Common Issues
+Do not delete `/app/data` to work around setup failures; it contains the generated configuration and installation state.
 
-1. **Port already in use**: Change `SERVER_PORT` in `.env` or systemd config
-2. **Database connection failed**: Check PostgreSQL is running and credentials are correct
-3. **Redis connection failed**: Check Redis is running and password is correct
-4. **Permission denied**: Ensure proper file ownership for binary install
+### Image pull or architecture errors
 
----
-
-## TLS Fingerprint Configuration
-
-ikik-api supports TLS fingerprint simulation to make requests appear as if they come from the official Claude CLI (Node.js client).
-
-> **馃挕 Tip:** Visit **[tls.ikik-api.example](https://tls.ikik-api.example/)** to get TLS fingerprint information for different devices and browsers.
-
-### Default Behavior
-
-- Built-in `claude_cli_v2` profile simulates Node.js 20.x + OpenSSL 3.x
-- JA3 Hash: `1a28e69016765d92e3b381168d68922c`
-- JA4: `t13d5911h1_a33745022dd6_1f22a2ca17c4`
-- Profile selection: `accountID % profileCount`
-
-### Configuration
-
-```yaml
-gateway:
-  tls_fingerprint:
-    enabled: true  # Global switch
-    profiles:
-      # Simple profile (uses default cipher suites)
-      profile_1:
-        name: "Profile 1"
-
-      # Profile with custom cipher suites (use compact array format)
-      profile_2:
-        name: "Profile 2"
-        cipher_suites: [4866, 4867, 4865, 49199, 49195, 49200, 49196]
-        curves: [29, 23, 24]
-        point_formats: 0
-
-      # Another custom profile
-      profile_3:
-        name: "Profile 3"
-        cipher_suites: [4865, 4866, 4867, 49199, 49200]
-        curves: [29, 23, 24, 25]
+```bash
+docker buildx imagetools inspect ghcr.io/ipanel/sliderapiv2:latest
+uname -m
 ```
 
-### Profile Fields
+The published manifest supports Linux AMD64 and Linux ARM64. Docker selects the matching platform automatically.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Display name (required) |
-| `cipher_suites` | []uint16 | Cipher suites in decimal. Empty = default |
-| `curves` | []uint16 | Elliptic curves in decimal. Empty = default |
-| `point_formats` | []uint8 | EC point formats. Empty = default |
+### Port conflict
 
-### Common Values Reference
+Change the host port only:
 
-**Cipher Suites (TLS 1.3):** `4865` (AES_128_GCM), `4866` (AES_256_GCM), `4867` (CHACHA20)
+```dotenv
+SERVER_PORT=18080
+```
 
-**Cipher Suites (TLS 1.2):** `49195`, `49196`, `49199`, `49200` (ECDHE variants)
+The container continues listening on port `8080`.
 
-**Curves:** `29` (X25519), `23` (P-256), `24` (P-384), `25` (P-521)
+## Binary installation
+
+The Linux release archives contain `ikik-api` for AMD64 and ARM64. The installer and systemd unit are retained for non-Docker deployments:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/install.sh | sudo bash
+```
+
+Binary deployments must provide their own MariaDB/Redis services and follow the same OAuth credential rules. See `config.example.yaml` and `ikik-api.service` before using this mode in production.

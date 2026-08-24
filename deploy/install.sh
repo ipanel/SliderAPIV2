@@ -79,7 +79,7 @@ declare -A MSG_ZH=(
     ["install_complete"]="ikik-api 安装完成！"
     ["install_dir"]="安装目录"
     ["next_steps"]="后续步骤"
-    ["step1_check_services"]="确保 PostgreSQL 和 Redis 正在运行："
+    ["step1_check_services"]="确保 MariaDB 和 Redis 正在运行："
     ["step2_start_service"]="启动 ikik-api 服务："
     ["step3_enable_autostart"]="设置开机自启："
     ["step4_open_wizard"]="在浏览器中打开设置向导："
@@ -204,7 +204,7 @@ declare -A MSG_EN=(
     ["install_complete"]="ikik-api installation completed!"
     ["install_dir"]="Installation directory"
     ["next_steps"]="NEXT STEPS"
-    ["step1_check_services"]="Make sure PostgreSQL and Redis are running:"
+    ["step1_check_services"]="Make sure MariaDB and Redis are running:"
     ["step2_start_service"]="Start ikik-api service:"
     ["step3_enable_autostart"]="Enable auto-start on boot:"
     ["step4_open_wizard"]="Open the Setup Wizard in your browser:"
@@ -656,8 +656,8 @@ install_service() {
 [Unit]
 Description=ikik-api - AI API Gateway Platform
 Documentation=https://github.com/${GITHUB_REPO}
-After=network.target postgresql.service redis.service
-Wants=postgresql.service redis.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

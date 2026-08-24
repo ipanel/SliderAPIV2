@@ -1,171 +1,175 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
-# ikik-api Docker Deployment Preparation Script
+# ikik-api Docker one-click deployment
 # =============================================================================
-# This script prepares deployment files for ikik-api:
-#   - Downloads docker-compose.local.yml and .env.example
-#   - Generates secure secrets (JWT_SECRET, TOTP_ENCRYPTION_KEY, MARIADB_PASSWORD)
-#   - Creates necessary data directories
-#
-# After running this script, you can start services with:
-#   docker-compose up -d
+# Downloads the current Compose/environment templates, generates local secrets
+# on first install, preserves existing credentials during upgrades, and starts
+# MariaDB, Redis, and ghcr.io/ipanel/sliderapiv2.
 # =============================================================================
 
-set -e
+set -euo pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# GitHub raw content base URL
 GITHUB_RAW_URL="https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy"
+COMPOSE_TMP=".docker-compose.yml.tmp.$$"
+ENV_EXAMPLE_TMP=".env.example.tmp.$$"
+ASSUME_YES=false
 
-# Print colored message
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+generate_secret() { openssl rand -hex 32; }
+cleanup() { rm -f "$COMPOSE_TMP" "$ENV_EXAMPLE_TMP"; }
+
+replace_env() {
+    local key="$1"
+    local value="$2"
+    local temp_file=".env.tmp.$$"
+    awk -v key="$key" -v value="$value" '
+        BEGIN { replaced = 0 }
+        index($0, key "=") == 1 { print key "=" value; replaced = 1; next }
+        { print }
+        END { if (!replaced) print key "=" value }
+    ' .env > "$temp_file"
+    mv "$temp_file" .env
 }
 
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+validate_existing_env() {
+    local missing=()
+    local key
+    local value
+
+    # Compose requires these values even when an existing MariaDB volume is reused.
+    for key in MARIADB_ROOT_PASSWORD MARIADB_PASSWORD; do
+        value="$(sed -n "s/^${key}=//p" .env | tail -n 1)"
+        if [ -z "$value" ]; then
+            missing+=("$key")
+        fi
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        print_error "Existing .env is missing required MariaDB settings: ${missing[*]}"
+        print_error "The updater will not replace credentials or auto-migrate a legacy database."
+        print_info "Back up the deployment, migrate the database explicitly, then add the required values to .env."
+        exit 1
+    fi
 }
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+has_persistent_data() {
+    local directory
+    for directory in data mariadb_data redis_data; do
+        if [ -d "$directory" ] && [ -n "$(find "$directory" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+download_templates() {
+    if command_exists curl; then
+        curl -fsSL "${GITHUB_RAW_URL}/docker-compose.local.yml" -o "$COMPOSE_TMP"
+        curl -fsSL "${GITHUB_RAW_URL}/.env.example" -o "$ENV_EXAMPLE_TMP"
+    elif command_exists wget; then
+        wget -q "${GITHUB_RAW_URL}/docker-compose.local.yml" -O "$COMPOSE_TMP"
+        wget -q "${GITHUB_RAW_URL}/.env.example" -O "$ENV_EXAMPLE_TMP"
+    else
+        print_error "curl or wget is required."
+        exit 1
+    fi
 }
 
-# Generate random secret
-generate_secret() {
-    openssl rand -hex 32
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -y|--yes) ASSUME_YES=true ;;
+            *) print_error "Unknown argument: $1"; exit 2 ;;
+        esac
+        shift
+    done
 }
 
-# Check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Main installation function
 main() {
-    echo ""
-    echo "=========================================="
-    echo "  ikik-api Deployment Preparation"
-    echo "=========================================="
-    echo ""
+    local existing_env=false
 
-    # Check if openssl is available
-    if ! command_exists openssl; then
-        print_error "openssl is not installed. Please install openssl first."
+    parse_args "$@"
+    trap cleanup EXIT
+
+    echo
+    echo "=========================================="
+    echo "  ikik-api Docker Deployment"
+    echo "=========================================="
+    echo
+
+    command_exists openssl || { print_error "openssl is required."; exit 1; }
+    command_exists docker || { print_error "Docker is required."; exit 1; }
+    docker compose version >/dev/null 2>&1 || { print_error "Docker Compose v2 (docker compose) is required."; exit 1; }
+
+    if [ -f .env ]; then
+        existing_env=true
+        print_warning "Existing deployment detected. The updater will preserve .env and all persistent credentials."
+        validate_existing_env
+    elif has_persistent_data; then
+        print_error "Persistent data exists but .env is missing. Refusing to generate replacement credentials."
+        print_info "Restore the original .env before updating this deployment."
         exit 1
     fi
 
-    # Check if deployment already exists
-    if [ -f "docker-compose.yml" ] && [ -f ".env" ]; then
-        print_warning "Deployment files already exist in current directory."
-        read -p "Overwrite existing files? (y/N): " -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Cancelled."
-            exit 0
+    if [ -f docker-compose.yml ] || [ "$existing_env" = true ]; then
+        print_warning "Deployment files already exist in the current directory."
+        if [ "$ASSUME_YES" != true ]; then
+            if [ ! -t 0 ] && [ ! -r /dev/tty ]; then
+                print_error "Cannot confirm update in non-interactive mode. Re-run with --yes after creating a backup."
+                exit 1
+            fi
+            read -r -p "Update deployment templates? Existing .env will be preserved. (y/N): " reply </dev/tty
+            if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+                print_info "Cancelled."
+                exit 0
+            fi
         fi
     fi
 
-    # Download docker-compose.local.yml and save as docker-compose.yml
-    print_info "Downloading docker-compose.yml..."
-    if command_exists curl; then
-        curl -sSL "${GITHUB_RAW_URL}/docker-compose.local.yml" -o docker-compose.yml
-    elif command_exists wget; then
-        wget -q "${GITHUB_RAW_URL}/docker-compose.local.yml" -O docker-compose.yml
+    print_info "Downloading Docker Compose and environment templates..."
+    download_templates
+    mv "$COMPOSE_TMP" docker-compose.yml
+    mv "$ENV_EXAMPLE_TMP" .env.example
+
+    if [ "$existing_env" = false ]; then
+        cp .env.example .env
+        replace_env MARIADB_ROOT_PASSWORD "$(generate_secret)"
+        replace_env MARIADB_PASSWORD "$(generate_secret)"
+        replace_env REDIS_PASSWORD "$(generate_secret)"
+        replace_env JWT_SECRET "$(generate_secret)"
+        replace_env TOTP_ENCRYPTION_KEY "$(generate_secret)"
+        print_success "Generated credentials for the new deployment."
     else
-        print_error "Neither curl nor wget is installed. Please install one of them."
-        exit 1
+        print_success "Preserved the existing .env credentials."
     fi
-    print_success "Downloaded docker-compose.yml"
-
-    # Download .env.example
-    print_info "Downloading .env.example..."
-    if command_exists curl; then
-        curl -sSL "${GITHUB_RAW_URL}/.env.example" -o .env.example
-    else
-        wget -q "${GITHUB_RAW_URL}/.env.example" -O .env.example
-    fi
-    print_success "Downloaded .env.example"
-
-    # Generate .env file with auto-generated secrets
-    print_info "Generating secure secrets..."
-    echo ""
-
-    # Generate secrets
-    JWT_SECRET=$(generate_secret)
-    TOTP_ENCRYPTION_KEY=$(generate_secret)
-    MARIADB_PASSWORD=$(generate_secret)
-
-    # Create .env from .env.example
-    cp .env.example .env
-
-    # Update .env with generated secrets (cross-platform compatible)
-    if sed --version >/dev/null 2>&1; then
-        # GNU sed (Linux)
-        sed -i "s/^JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" .env
-        sed -i "s/^TOTP_ENCRYPTION_KEY=.*/TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}/" .env
-        sed -i "s/^MARIADB_PASSWORD=.*/MARIADB_PASSWORD=${MARIADB_PASSWORD}/" .env
-    else
-        # BSD sed (macOS)
-        sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" .env
-        sed -i '' "s/^TOTP_ENCRYPTION_KEY=.*/TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY}/" .env
-        sed -i '' "s/^MARIADB_PASSWORD=.*/MARIADB_PASSWORD=${MARIADB_PASSWORD}/" .env
-    fi
-
-    # Create data directories
-    print_info "Creating data directories..."
-    mkdir -p data mariadb_data redis_data
-    print_success "Created data directories"
-
-    # Set secure permissions for .env file (readable/writable only by owner)
     chmod 600 .env
-    echo ""
 
-    # Display completion message
-    echo "=========================================="
-    echo "  Preparation Complete!"
-    echo "=========================================="
-    echo ""
-    echo "Generated secure credentials:"
-    echo "  MARIADB_PASSWORD:      ${MARIADB_PASSWORD}"
-    echo "  JWT_SECRET:            ${JWT_SECRET}"
-    echo "  TOTP_ENCRYPTION_KEY:   ${TOTP_ENCRYPTION_KEY}"
-    echo ""
-    print_warning "These credentials have been saved to .env file."
-    print_warning "Please keep them secure and do not share publicly!"
-    echo ""
-    echo "Directory structure:"
-    echo "  docker-compose.yml        - Docker Compose configuration"
-    echo "  .env                      - Environment variables (generated secrets)"
-    echo "  .env.example              - Example template (for reference)"
-    echo "  data/                     - Application data (will be created on first run)"
-    echo "  mariadb_data/             - MariaDB data"
-    echo "  redis_data/               - Redis data"
-    echo ""
-    echo "Next steps:"
-    echo "  1. (Optional) Edit .env to customize configuration"
-    echo "  2. Start services:"
-    echo "     docker-compose up -d"
-    echo ""
-    echo "  3. View logs:"
-    echo "     docker-compose logs -f ikik-api"
-    echo ""
-    echo "  4. Access Web UI:"
-    echo "     http://localhost:8080"
-    echo ""
-    print_info "If admin password is not set in .env, it will be auto-generated."
-    print_info "Check logs for the generated admin password on first startup."
-    echo ""
+    mkdir -p data mariadb_data redis_data
+
+    print_info "Pulling multi-architecture images..."
+    docker compose pull
+    print_info "Starting services..."
+    docker compose up -d
+
+    echo
+    print_success "Deployment started."
+    echo "  Web UI:      http://localhost:8080"
+    echo "  Status:      docker compose ps"
+    echo "  App logs:    docker compose logs -f ikik-api"
+    echo "  Upgrade:     docker compose pull && docker compose up -d"
+    echo
+    print_warning "Secrets are stored only in .env and are not printed. Back up .env and data directories securely."
+    print_info "If ADMIN_PASSWORD is empty, read the generated admin password from the first-start logs."
 }
 
-# Run main function
 main "$@"

@@ -239,7 +239,7 @@ git push
 
 ## 自定义镜像构建
 
-生产环境不要继续使用官方镜像 `ikik-api:latest`，否则会覆盖二开功能。必须构建并使用自己的镜像。
+生产环境镜像统一使用 `ghcr.io/ipanel/sliderapiv2:<版本标签>`。不要使用没有仓库限定的 `ikik-api:latest`，也不要只依赖 `latest`；正式部署应固定到可回滚的版本标签。
 
 根目录 `Dockerfile` 是推荐的生产镜像构建入口，会完成：
 
@@ -255,13 +255,13 @@ Linux/macOS：
 ```bash
 VERSION=v0.1.122-2dev.1
 COMMIT=$(git rev-parse --short HEAD)
-IMAGE=registry.example.com/ikik-api-custom:$VERSION
+IMAGE=ghcr.io/ipanel/sliderapiv2:$VERSION
 
 docker build \
   --build-arg VERSION=$VERSION \
   --build-arg COMMIT=$COMMIT \
   -t $IMAGE \
-  -t registry.example.com/ikik-api-custom:latest \
+  -t ghcr.io/ipanel/sliderapiv2:latest \
   .
 ```
 
@@ -270,13 +270,13 @@ Windows PowerShell：
 ```powershell
 $version = "v0.1.122-2dev.1"
 $commit = git rev-parse --short HEAD
-$image = "registry.example.com/ikik-api-custom:$version"
+$image = "ghcr.io/ipanel/sliderapiv2:$version"
 
 docker build `
   --build-arg VERSION=$version `
   --build-arg COMMIT=$commit `
   -t $image `
-  -t registry.example.com/ikik-api-custom:latest `
+  -t ghcr.io/ipanel/sliderapiv2:latest `
   .
 ```
 
@@ -287,7 +287,7 @@ docker build `
 ```bash
 VERSION=v0.1.122-2dev.1
 COMMIT=$(git rev-parse --short HEAD)
-IMAGE=registry.example.com/ikik-api-custom:$VERSION
+IMAGE=ghcr.io/ipanel/sliderapiv2:$VERSION
 
 docker buildx create --use --name ikik-api-builder || true
 docker buildx build \
@@ -295,7 +295,7 @@ docker buildx build \
   --build-arg VERSION=$VERSION \
   --build-arg COMMIT=$COMMIT \
   -t $IMAGE \
-  -t registry.example.com/ikik-api-custom:latest \
+  -t ghcr.io/ipanel/sliderapiv2:latest \
   --push \
   .
 ```
@@ -303,9 +303,9 @@ docker buildx build \
 如果只在当前机器构建并推送单架构镜像：
 
 ```bash
-docker login registry.example.com
-docker push registry.example.com/ikik-api-custom:v0.1.122-2dev.1
-docker push registry.example.com/ikik-api-custom:latest
+docker login ghcr.io
+docker push ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
+docker push ghcr.io/ipanel/sliderapiv2:latest
 ```
 
 镜像 tag 建议包含官方版本和二开构建序号，例如：
@@ -325,9 +325,11 @@ v0.1.122-2dev.2
 deploy/docker-compose.local.yml
 ```
 
+当前该 Compose 使用 MariaDB 10.11（镜像 `mariadb:10.11.14`），数据库服务名为 `mariadb`。
+
 原因：
 
-- `data`、`postgres_data`、`redis_data` 都在部署目录下，备份和迁移直观。
+- `data`、`mariadb_data`、`redis_data` 都在部署目录下，备份和迁移直观。
 - 不依赖 Docker 命名卷路径。
 - 整个 `deploy` 目录可以打包迁移。
 
@@ -357,7 +359,9 @@ cp .env.example .env
 编辑 `.env`，至少修改：
 
 ```bash
-POSTGRES_PASSWORD=<强密码>
+MARIADB_ROOT_PASSWORD=<数据库 root 强密码>
+MARIADB_PASSWORD=<应用数据库用户强密码>
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
 JWT_SECRET=<固定随机密钥>
 TOTP_ENCRYPTION_KEY=<固定随机密钥>
 ADMIN_EMAIL=<管理员邮箱>
@@ -371,22 +375,16 @@ TZ=Asia/Shanghai
 openssl rand -hex 32
 ```
 
-建议使用 `docker-compose.override.yml` 指定自定义镜像，避免直接改官方 compose 文件：
-
-```yaml
-services:
-  ikik-api:
-    image: registry.example.com/ikik-api-custom:v0.1.122-2dev.1
-```
+`docker-compose.local.yml` 通过 `IKIK_API_IMAGE` 读取完整镜像引用，无需另外创建 override 文件。未设置时默认使用 `ghcr.io/ipanel/sliderapiv2:latest`；正式部署应在 `.env` 中固定版本标签，例如上面的 `v0.1.122-2dev.1`，更新或回滚时只修改该变量。
 
 启动：
 
 ```bash
-docker login registry.example.com
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml pull
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml up -d
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml ps
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml logs -f ikik-api
+docker login ghcr.io
+docker compose -f docker-compose.local.yml pull
+docker compose -f docker-compose.local.yml up -d
+docker compose -f docker-compose.local.yml ps
+docker compose -f docker-compose.local.yml logs -f ikik-api
 ```
 
 健康检查：
@@ -414,54 +412,53 @@ mkdir -p backups
 
 ```bash
 tar czf backups/ikik-api-files-$(date +%F-%H%M%S).tgz \
-  .env docker-compose.local.yml docker-compose.override.yml data postgres_data redis_data
+  .env docker-compose.local.yml data mariadb_data redis_data
 ```
 
-再做一次 PostgreSQL 逻辑备份：
+再做一次 MariaDB 逻辑备份：
 
 ```bash
 set -a
 . ./.env
 set +a
 
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml exec -T postgres \
-  pg_dump -U "${POSTGRES_USER:-ikik_api}" "${POSTGRES_DB:-ikik_api}" \
+docker compose -f docker-compose.local.yml exec -T mariadb \
+  mariadb-dump -u"${MARIADB_USER:-ikik_api}" -p"${MARIADB_PASSWORD}" \
+  "${MARIADB_DATABASE:-ikik_api}" \
   > backups/ikik-api-db-$(date +%F-%H%M%S).sql
 ```
 
 不要执行：
 
 ```bash
-docker compose down -v
+docker compose -f docker-compose.local.yml down -v
 ```
 
 `down -v` 会删除数据卷。生产环境除非已经确认要清空数据，否则禁止使用。
 
 ### 2. 修改镜像 tag
 
-编辑服务器上的 `docker-compose.override.yml`：
+编辑服务器上的 `.env`，把 `IKIK_API_IMAGE` 改为要部署的完整镜像引用：
 
-```yaml
-services:
-  ikik-api:
-    image: registry.example.com/ikik-api-custom:v0.1.122-2dev.1
+```bash
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
 ```
 
 ### 3. 拉取并重建容器
 
 ```bash
-docker login registry.example.com
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml pull ikik-api
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml up -d ikik-api
+docker login ghcr.io
+docker compose -f docker-compose.local.yml pull ikik-api
+docker compose -f docker-compose.local.yml up -d ikik-api
 ```
 
-只更新应用容器时，不需要重建 PostgreSQL 和 Redis。
+只更新应用容器时，不需要重建 MariaDB 和 Redis。
 
 ### 4. 验证
 
 ```bash
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml ps
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml logs --tail=200 ikik-api
+docker compose -f docker-compose.local.yml ps
+docker compose -f docker-compose.local.yml logs --tail=200 ikik-api
 curl -fsS http://127.0.0.1:8080/health
 ```
 
@@ -477,23 +474,21 @@ curl -fsS http://127.0.0.1:8080/health
 回滚前先确认旧镜像 tag，例如：
 
 ```bash
-registry.example.com/ikik-api-custom:v0.1.121-2dev.1
+ghcr.io/ipanel/sliderapiv2:v0.1.121-2dev.1
 ```
 
-修改 `docker-compose.override.yml`：
+修改 `.env` 中的完整镜像引用：
 
-```yaml
-services:
-  ikik-api:
-    image: registry.example.com/ikik-api-custom:v0.1.121-2dev.1
+```bash
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.121-2dev.1
 ```
 
 执行：
 
 ```bash
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml pull ikik-api
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml up -d ikik-api
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml logs --tail=200 ikik-api
+docker compose -f docker-compose.local.yml pull ikik-api
+docker compose -f docker-compose.local.yml up -d ikik-api
+docker compose -f docker-compose.local.yml logs --tail=200 ikik-api
 ```
 
 注意：如果新版本已经执行了不可逆数据库迁移，单纯回滚镜像可能不够。此时要结合升级前的数据库备份恢复。恢复生产数据库属于高风险操作，必须先确认影响范围和恢复点。
@@ -514,25 +509,21 @@ docker compose -f docker-compose.dev.yml logs -f ikik-api
 
 ## 常见问题
 
-### 误用了官方镜像怎么办
+### 镜像配置不正确怎么办
 
-如果 `docker-compose.local.yml` 或 `docker-compose.override.yml` 中仍是：
+如果 `.env` 中仍把 `IKIK_API_IMAGE` 设置为没有仓库限定的 `ikik-api:latest`，说明镜像配置不正确。改为 GHCR 上带版本标签的完整镜像引用：
 
-```yaml
-image: ikik-api:latest
+```bash
+IKIK_API_IMAGE=ghcr.io/ipanel/sliderapiv2:v0.1.122-2dev.1
 ```
 
-说明正在使用官方镜像，不包含二开功能。改成自己的镜像：
-
-```yaml
-image: registry.example.com/ikik-api-custom:v0.1.122-2dev.1
-```
+`docker-compose.local.yml` 中对应的镜像声明应保持为 `${IKIK_API_IMAGE:-ghcr.io/ipanel/sliderapiv2:latest}`，由 `.env` 覆盖正式部署版本。
 
 然后重新拉取并启动：
 
 ```bash
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml pull ikik-api
-docker compose -f docker-compose.local.yml -f docker-compose.override.yml up -d ikik-api
+docker compose -f docker-compose.local.yml pull ikik-api
+docker compose -f docker-compose.local.yml up -d ikik-api
 ```
 
 ### 合并后如何确认二开差异还在
@@ -600,13 +591,13 @@ TOTP_ENCRYPTION_KEY
 镜像阶段：
 
 - 镜像 tag 包含官方版本和二开构建号。
-- 镜像已推送到自己的镜像仓库。
-- 服务器 compose 使用自定义镜像，不使用 `ikik-api:latest`。
+- 镜像已推送到 `ghcr.io/ipanel/sliderapiv2`。
+- `.env` 中的 `IKIK_API_IMAGE` 使用 `ghcr.io/ipanel/sliderapiv2:<版本标签>`，不使用无仓库限定的 `ikik-api:latest`。
 
 部署阶段：
 
-- 升级前已备份部署目录和 PostgreSQL。
-- 没有执行 `docker compose down -v`。
+- 升级前已备份部署目录和 MariaDB。
+- 没有执行 `docker compose -f docker-compose.local.yml down -v`。
 - `.env` 中生产密钥固定。
 - 更新后 `/health` 正常。
 - 管理后台、账号调用、收益管理核心页面验证正常。

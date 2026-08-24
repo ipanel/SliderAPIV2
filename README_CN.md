@@ -2,7 +2,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)
+![MariaDB](https://img.shields.io/badge/MariaDB-10.11+-003545?logo=mariadb&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7+-DC382D?logo=redis&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-LGPL--3.0-blue)
@@ -38,7 +38,7 @@ QQ 群：`146499741`
 - 内容审查与风控接入点，支持请求/响应审计。
 - 内置发布流程，支持标签构建、Docker 镜像、归档包和 GitHub Releases。
 - 前端控制台基于 Vue 3、TypeScript、Pinia、Vue Router、Tailwind CSS 和 Vite。
-- 后端服务基于 Go、Gin、Ent、PostgreSQL、Redis 和模块化服务边界。
+- 后端服务基于 Go、Gin、Ent、MariaDB、Redis 和模块化服务边界。
 
 ## 1.0.3 更新内容
 
@@ -50,10 +50,10 @@ QQ 群：`146499741`
 
 ## 技术栈
 
-- 后端：Go 1.27.0、Gin、Ent、PostgreSQL、Redis
+- 后端：Go 1.27.0、Gin、Ent、MariaDB、Redis
 - 前端：Vue 3、TypeScript、Vite、Pinia、Tailwind CSS
 - 测试：Go test、Vitest、vue-tsc、ESLint
-- 部署：Docker 或源码构建，推荐外置 PostgreSQL 和 Redis
+- 部署：Docker 或源码构建，推荐外置 MariaDB 和 Redis
 
 ## 仓库结构
 
@@ -73,7 +73,7 @@ QQ 群：`146499741`
 - Go 1.27.0
 - Node.js 20+
 - pnpm 9+
-- PostgreSQL
+- MariaDB
 - Redis
 - Docker，可选但推荐用于部署
 
@@ -88,7 +88,7 @@ cp deploy/config.example.yaml deploy/config.yaml
 根据你的环境修改生成的配置：
 
 - `server`：监听地址、端口、前端地址、请求体限制、CORS 和安全响应头。
-- `database`：PostgreSQL 连接设置。
+- `database`：MariaDB 连接设置。
 - `redis`：缓存和队列后端设置。
 - `gateway`：上游超时、请求体大小限制、路由和模型行为。
 - `security`：URL 白名单、响应头过滤、代理兜底和 CSP。
@@ -145,6 +145,17 @@ make build-frontend
 docker build -t ikik-api:local .
 ```
 
+## Docker 快速部署
+
+推荐直接拉取多架构镜像 `ghcr.io/ipanel/sliderapiv2:latest`，并通过维护好的 Compose 配置启动 ikik-api、MariaDB 和 Redis：
+
+```bash
+mkdir -p sliderapiv2 && cd sliderapiv2
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
+```
+
+生产环境应在 `.env` 中将 `IKIK_API_IMAGE` 固定为版本标签，例如 `ghcr.io/ipanel/sliderapiv2:vX.Y.Z`。升级、外部数据库、OAuth 环境变量和接口 404 排查请参阅 [deploy/README.md](deploy/README.md)。
+
 ## 测试
 
 运行全部已配置检查：
@@ -200,12 +211,12 @@ Nginx 默认会丢弃带下划线的请求头，这可能破坏会话路由和�
 
 推荐的生产基础设置：
 
-- 使用应用容器外部的 PostgreSQL 和 Redis。
+- 使用应用容器外部的 MariaDB 和 Redis。
 - 挂载生产配置文件，不要把密钥写入镜像。
 - 在反向代理或负载均衡器处终止 TLS。
 - 不要让 `/api/*`、`/v1/*`、流式接口和网关路由进入 CDN 缓存。
 - 统一配置反向代理和后端的请求体大小限制。
-- 在执行迁移或升级应用前备份 PostgreSQL。
+- 在执行迁移或升级应用前备份 MariaDB。
 
 ## 安全
 

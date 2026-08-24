@@ -8,9 +8,10 @@
 
 ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.27.0-alpine
-ARG ALPINE_IMAGE=alpine:3.20
+ARG ALPINE_IMAGE=alpine:3.21
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
+ARG ALPINE_MIRROR=
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -19,8 +20,7 @@ FROM ${NODE_IMAGE} AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Install pnpm. Keep this pinned so Docker builds do not inherit breaking
-# behavior changes from pnpm@latest.
+# Install pnpm. Pin v9 to avoid pnpm v10 approve-builds breaking reproducible Docker builds.
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 # Install dependencies first (better caching)
@@ -37,17 +37,21 @@ RUN pnpm run build
 FROM ${GOLANG_IMAGE} AS backend-builder
 
 # Build arguments for version info (set by CI)
-ARG VERSION=docker
+ARG VERSION=
 ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
+ARG ALPINE_MIRROR
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN if [ -n "${ALPINE_MIRROR}" ]; then \
+        sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories; \
+    fi && \
+    apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app/backend
 
@@ -62,14 +66,19 @@ COPY backend/ ./
 COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
 
 # Build the binary (BuildType=release for CI builds, embed frontend)
-RUN CGO_ENABLED=0 GOOS=linux go build \
+# Version precedence: build arg VERSION > cmd/server/VERSION
+RUN VERSION_VALUE="${VERSION}" && \
+    if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(tr -d '\r\n' < ./cmd/server/VERSION)"; fi && \
+    DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
+    CGO_ENABLED=0 GOOS=linux go build \
     -tags embed \
-    -ldflags="-s -w -X main.Commit=${COMMIT} -X main.Date=${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)} -X main.BuildType=release" \
+    -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
+    -trimpath \
     -o /app/ikik-api \
     ./cmd/server
 
 # -----------------------------------------------------------------------------
-# Stage 3: Final Runtime Image
+# Stage 4: Final Runtime Image
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
@@ -82,9 +91,10 @@ LABEL org.opencontainers.image.source="https://github.com/ipanel/SliderAPIv2"
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
-    curl \
     su-exec \
+    mariadb-client \
     && rm -rf /var/cache/apk/*
+
 
 # Create non-root user
 RUN addgroup -g 1000 ikik-api && \
@@ -93,11 +103,12 @@ RUN addgroup -g 1000 ikik-api && \
 # Set working directory
 WORKDIR /app
 
-# Copy binary from builder
-COPY --from=backend-builder /app/ikik-api /app/ikik-api
+# Copy binary/resources with ownership to avoid extra full-layer chown copy
+COPY --from=backend-builder --chown=ikik-api:ikik-api /app/ikik-api /app/ikik-api
+COPY --from=backend-builder --chown=ikik-api:ikik-api /app/backend/resources /app/resources
 
 # Create data directory
-RUN mkdir -p /app/data && chown -R ikik-api:ikik-api /app
+RUN mkdir -p /app/data && chown ikik-api:ikik-api /app/data
 
 # Copy entrypoint script (fixes volume permissions then drops to ikik-api)
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh

@@ -2,7 +2,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)
+![MariaDB](https://img.shields.io/badge/MariaDB-10.11+-003545?logo=mariadb&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7+-DC382D?logo=redis&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-LGPL--3.0-blue)
@@ -38,7 +38,7 @@ QQ グループ：`146499741`
 - リクエスト/レスポンス監査のためのコンテンツモデレーションとリスク制御の統合ポイント。
 - タグビルド、Docker イメージ、アーカイブ、GitHub Releases に対応した組み込みリリースワークフロー。
 - Vue 3、TypeScript、Pinia、Vue Router、Tailwind CSS、Vite によるフロントエンドコンソール。
-- Go、Gin、Ent、PostgreSQL、Redis とモジュール化されたサービス境界によるバックエンド。
+- Go、Gin、Ent、MariaDB、Redis とモジュール化されたサービス境界によるバックエンド。
 
 ## 1.0.3 更新内容
 
@@ -50,10 +50,10 @@ QQ グループ：`146499741`
 
 ## 技術スタック
 
-- バックエンド：Go 1.27.0、Gin、Ent、PostgreSQL、Redis
+- バックエンド：Go 1.27.0、Gin、Ent、MariaDB、Redis
 - フロントエンド：Vue 3、TypeScript、Vite、Pinia、Tailwind CSS
 - テスト：Go test、Vitest、vue-tsc、ESLint
-- デプロイ：Docker またはソースビルド。外部 PostgreSQL と Redis の利用を推奨
+- デプロイ：Docker またはソースビルド。外部 MariaDB と Redis の利用を推奨
 
 ## リポジトリ構成
 
@@ -73,7 +73,7 @@ QQ グループ：`146499741`
 - Go 1.27.0
 - Node.js 20+
 - pnpm 9+
-- PostgreSQL
+- MariaDB
 - Redis
 - Docker（任意。ただしデプロイでは推奨）
 
@@ -88,7 +88,7 @@ cp deploy/config.example.yaml deploy/config.yaml
 生成された設定を環境に合わせて編集します。
 
 - `server`：ホスト、ポート、フロントエンド URL、リクエストボディ制限、CORS、セキュリティヘッダー。
-- `database`：PostgreSQL 接続設定。
+- `database`：MariaDB 接続設定。
 - `redis`：キャッシュおよびキューバックエンド設定。
 - `gateway`：上流タイムアウト、ボディサイズ制限、ルーティング、モデル挙動。
 - `security`：URL allowlist、レスポンスヘッダーのフィルタリング、プロキシフォールバック、CSP。
@@ -145,6 +145,17 @@ Docker イメージをビルドします。
 docker build -t ikik-api:local .
 ```
 
+## Docker クイックデプロイ
+
+マルチアーキテクチャイメージ `ghcr.io/ipanel/sliderapiv2:latest` を取得し、管理対象の Compose 構成で ikik-api、MariaDB、Redis を起動する方法を推奨します。
+
+```bash
+mkdir -p sliderapiv2 && cd sliderapiv2
+curl -fsSL https://raw.githubusercontent.com/ipanel/SliderAPIv2/main/deploy/docker-deploy.sh | bash
+```
+
+本番環境では `.env` の `IKIK_API_IMAGE` を `ghcr.io/ipanel/sliderapiv2:vX.Y.Z` のようなバージョンタグに固定してください。アップグレード、外部データベース、OAuth 環境変数、404 エラーの調査については [deploy/README.md](deploy/README.md) を参照してください。
+
 ## テスト
 
 設定済みのチェックをすべて実行します。
@@ -200,12 +211,12 @@ Nginx はデフォルトでアンダースコアを含むヘッダーを破棄�
 
 推奨される本番環境の基本事項：
 
-- PostgreSQL と Redis はアプリケーションコンテナの外部で運用します。
+- MariaDB と Redis はアプリケーションコンテナの外部で運用します。
 - シークレットをイメージに焼き込まず、本番設定ファイルをマウントします。
 - TLS はリバースプロキシまたはロードバランサーで終端します。
 - `/api/*`、`/v1/*`、ストリーミング、ゲートウェイルートを CDN キャッシュ対象にしないでください。
 - リバースプロキシとバックエンドでリクエストボディ制限を一致させます。
-- マイグレーションまたはアプリケーションアップグレード前に PostgreSQL をバックアップしてください。
+- マイグレーションまたはアプリケーションアップグレード前に MariaDB をバックアップしてください。
 
 ## セキュリティ
 

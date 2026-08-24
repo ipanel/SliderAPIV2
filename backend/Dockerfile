@@ -1,3 +1,5 @@
+# DEVELOPMENT ONLY: backend-only image without the embedded Vue frontend.
+# Production and GHCR builds must use the repository-root Dockerfile.
 FROM golang:1.27.0-alpine
 
 WORKDIR /app
