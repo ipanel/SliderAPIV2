@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"ikik-api/ent/authidentity"
+	infraerrors "ikik-api/internal/pkg/errors"
 	"ikik-api/internal/service"
 )
 
@@ -108,4 +109,134 @@ func TestEmailOAuthInvitationGateRunsBeforeSyntheticAccountCreation(t *testing.T
 	count, countErr := client.User.Query().Count(ctx)
 	require.NoError(t, countErr)
 	require.Zero(t, count)
+}
+
+func TestOIDCDirectRegistrationIgnoresRegistrationAndInvitationSettings(t *testing.T) {
+	svc, _, client := newAuthServiceWithEnt(t, map[string]string{
+		service.SettingKeyRegistrationEnabled:   "false",
+		service.SettingKeyInvitationCodeEnabled: "true",
+	}, nil)
+	ctx := context.Background()
+
+	tokenPair, user, created, err := svc.CompletePendingOIDCOAuth(ctx, service.EmailOAuthIdentityInput{
+		ProviderType:    "oidc",
+		ProviderKey:     "https://issuer.example.com",
+		ProviderSubject: "oidc-direct-subject",
+		Username:        "oidc-user",
+	}, "", "")
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotNil(t, tokenPair)
+	require.NotNil(t, user)
+
+	identity, err := client.AuthIdentity.Query().Where(
+		authidentity.ProviderTypeEQ("oidc"),
+		authidentity.ProviderKeyEQ("https://issuer.example.com"),
+		authidentity.ProviderSubjectEQ("oidc-direct-subject"),
+	).Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, user.ID, identity.UserID)
+}
+
+func TestOIDCDirectRegistrationRecoversReservedSyntheticAccount(t *testing.T) {
+	svc, repo, client := newAuthServiceWithEnt(t, map[string]string{
+		service.SettingKeyRegistrationEnabled: "false",
+	}, nil)
+	ctx := context.Background()
+
+	email, err := service.OAuthSyntheticEmail("oidc", "https://issuer.example.com", "oidc-reserved-subject")
+	require.NoError(t, err)
+	orphan := &service.User{
+		Email:        email,
+		Username:     "orphan-oidc-user",
+		PasswordHash: "hash",
+		Role:         service.RoleUser,
+		Status:       service.StatusActive,
+		SignupSource: "oidc",
+	}
+	require.NoError(t, repo.Create(ctx, orphan))
+
+	tokenPair, user, created, err := svc.CompletePendingOIDCOAuth(ctx, service.EmailOAuthIdentityInput{
+		ProviderType:    "oidc",
+		ProviderKey:     "https://issuer.example.com",
+		ProviderSubject: "oidc-reserved-subject",
+		Username:        "oidc-user",
+	}, "", "")
+	require.NoError(t, err)
+	require.False(t, created)
+	require.NotNil(t, tokenPair)
+	require.Equal(t, orphan.ID, user.ID)
+
+	identity, err := client.AuthIdentity.Query().Where(
+		authidentity.ProviderTypeEQ("oidc"),
+		authidentity.ProviderKeyEQ("https://issuer.example.com"),
+		authidentity.ProviderSubjectEQ("oidc-reserved-subject"),
+	).Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, orphan.ID, identity.UserID)
+}
+
+func TestOIDCDirectRegistrationPolicyRejectsOtherProviders(t *testing.T) {
+	providers := []string{"github", "google", "linuxdo", "wechat"}
+	for _, provider := range providers {
+		t.Run(provider, func(t *testing.T) {
+			svc, _, client := newAuthServiceWithEnt(t, map[string]string{
+				service.SettingKeyRegistrationEnabled:   "false",
+				service.SettingKeyInvitationCodeEnabled: "true",
+			}, nil)
+			ctx := context.Background()
+			input := service.EmailOAuthIdentityInput{
+				ProviderType:    provider,
+				ProviderKey:     provider,
+				ProviderSubject: provider + "-policy-subject",
+				Username:        provider + "-user",
+			}
+
+			_, _, _, err := svc.CompletePendingOIDCOAuth(ctx, input, "", "")
+			require.Equal(t, "OAUTH_PROVIDER_INVALID", infraerrors.Reason(err))
+
+			_, _, _, err = svc.CompletePendingEmailOAuthWithSignupCodes(ctx, input, "", "", "")
+			require.ErrorIs(t, err, service.ErrRegDisabled)
+
+			count, countErr := client.User.Query().Count(ctx)
+			require.NoError(t, countErr)
+			require.Zero(t, count)
+		})
+	}
+}
+
+func TestOIDCDirectRegistrationDoesNotRecoverForeignSyntheticAccount(t *testing.T) {
+	svc, repo, client := newAuthServiceWithEnt(t, map[string]string{
+		service.SettingKeyRegistrationEnabled: "false",
+	}, nil)
+	ctx := context.Background()
+
+	email, err := service.OAuthSyntheticEmail("oidc", "https://issuer.example.com", "oidc-foreign-subject")
+	require.NoError(t, err)
+	foreign := &service.User{
+		Email:        email,
+		Username:     "foreign-user",
+		PasswordHash: "hash",
+		Role:         service.RoleUser,
+		Status:       service.StatusActive,
+		SignupSource: "email",
+	}
+	require.NoError(t, repo.Create(ctx, foreign))
+
+	_, _, created, err := svc.CompletePendingOIDCOAuth(ctx, service.EmailOAuthIdentityInput{
+		ProviderType:    "oidc",
+		ProviderKey:     "https://issuer.example.com",
+		ProviderSubject: "oidc-foreign-subject",
+		Username:        "oidc-user",
+	}, "", "")
+	require.False(t, created)
+	require.Equal(t, "OAUTH_SYNTHETIC_EMAIL_CONFLICT", infraerrors.Reason(err))
+
+	identityCount, countErr := client.AuthIdentity.Query().Where(
+		authidentity.ProviderTypeEQ("oidc"),
+		authidentity.ProviderKeyEQ("https://issuer.example.com"),
+		authidentity.ProviderSubjectEQ("oidc-foreign-subject"),
+	).Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, identityCount)
 }

@@ -43,6 +43,23 @@ func TestOIDCSyntheticEmailStableAndDistinct(t *testing.T) {
 	require.Contains(t, e1, "@oidc-connect.invalid")
 }
 
+func TestOIDCSyntheticEmailPreservesIssuerPathCase(t *testing.T) {
+	upperIssuer := "https://issuer.example.com/Tenant"
+	lowerIssuer := "https://issuer.example.com/tenant"
+	subject := "subject-a"
+
+	upper := oidcSyntheticEmailFromIdentityKey(oidcIdentityKey(upperIssuer, subject))
+	lower := oidcSyntheticEmailFromIdentityKey(oidcIdentityKey(lowerIssuer, subject))
+	require.NotEqual(t, upper, lower)
+
+	serviceUpper, err := service.OAuthSyntheticEmail("oidc", upperIssuer, subject)
+	require.NoError(t, err)
+	serviceLower, err := service.OAuthSyntheticEmail("oidc", lowerIssuer, subject)
+	require.NoError(t, err)
+	require.Equal(t, upper, serviceUpper)
+	require.Equal(t, lower, serviceLower)
+}
+
 func TestBuildOIDCAuthorizeURLIncludesNonceAndPKCE(t *testing.T) {
 	cfg := config.OIDCConnectConfig{
 		AuthorizeURL: "https://issuer.example.com/auth",
@@ -658,7 +675,7 @@ func TestOIDCOAuthCallbackNewIdentityIgnoresRequireEmailVerified(t *testing.T) {
 	require.Equal(t, createdUser.ID, identity.UserID)
 }
 
-func TestOIDCOAuthCallbackCreatesInvitationRequiredPendingSessionWhenSignupRequiresInvite(t *testing.T) {
+func TestOIDCOAuthCallbackCreatesAccountWhenRegistrationDisabledAndSignupRequiresInvite(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-subject-invite",
 		PreferredUsername: "oidc_invite",
@@ -669,7 +686,9 @@ func TestOIDCOAuthCallbackCreatesInvitationRequiredPendingSessionWhenSignupRequi
 	})
 	defer cleanup()
 
-	handler, client := newOIDCOAuthHandlerAndClient(t, true, cfg)
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, true, map[string]string{
+		service.SettingKeyRegistrationEnabled: "false",
+	}, cfg)
 	t.Cleanup(func() { _ = client.Close() })
 
 	recorder := httptest.NewRecorder()
@@ -686,31 +705,27 @@ func TestOIDCOAuthCallbackCreatesInvitationRequiredPendingSessionWhenSignupRequi
 	handler.OIDCOAuthCallback(c)
 
 	require.Equal(t, http.StatusFound, recorder.Code)
-	require.Equal(t, "/auth/oidc/callback", recorder.Header().Get("Location"))
-
-	sessionCookie := findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName)
-	require.NotNil(t, sessionCookie)
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, "/auth/oidc/callback", location.Path)
+	fragment, err := url.ParseQuery(location.Fragment)
+	require.NoError(t, err)
+	require.NotEmpty(t, fragment.Get("access_token"))
+	require.NotEmpty(t, fragment.Get("refresh_token"))
+	require.Equal(t, "/dashboard", fragment.Get("redirect"))
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
 
 	ctx := context.Background()
-	session, err := client.PendingAuthSession.Query().
-		Where(pendingauthsession.SessionTokenEQ(decodeCookieValueForTest(t, sessionCookie.Value))).
-		Only(ctx)
+	syntheticEmail := oidcSyntheticEmailFromIdentityKey(oidcIdentityKey(cfg.IssuerURL, "oidc-subject-invite"))
+	user, err := client.User.Query().Where(dbuser.EmailEQ(syntheticEmail)).Only(ctx)
 	require.NoError(t, err)
-	require.Equal(t, oauthIntentLogin, session.Intent)
-	require.Nil(t, session.TargetUserID)
-	require.Equal(t, oidcSyntheticEmailFromIdentityKey(oidcIdentityKey(cfg.IssuerURL, "oidc-subject-invite")), session.ResolvedEmail)
-
-	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "invitation_required", completion["error"])
-	require.Equal(t, true, completion["invitation_required"])
-	require.Equal(t, "/dashboard", completion["redirect"])
-	require.NotContains(t, completion, "step")
-	require.NotContains(t, completion, "email")
-	require.NotContains(t, completion, "existing_account_email")
-	userCount, err := client.User.Query().Count(ctx)
+	identity, err := client.AuthIdentity.Query().Where(
+		authidentity.ProviderTypeEQ("oidc"),
+		authidentity.ProviderKeyEQ(cfg.IssuerURL),
+		authidentity.ProviderSubjectEQ("oidc-subject-invite"),
+	).Only(ctx)
 	require.NoError(t, err)
-	require.Zero(t, userCount)
+	require.Equal(t, user.ID, identity.UserID)
 }
 
 func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {
@@ -977,8 +992,13 @@ func TestCompleteOIDCOAuthRegistrationReturnsPendingSessionWhenChoiceStillRequir
 	require.Nil(t, storedSession.ConsumedAt)
 }
 
-func TestCompleteOIDCOAuthRegistrationDirectlyCreatesFromChoiceWithoutInvitation(t *testing.T) {
-	handler, client := newOAuthPendingFlowTestHandler(t, false)
+func TestCompleteOIDCOAuthRegistrationDirectlyCreatesFromChoiceWhenRegistrationDisabledAndInviteRequired(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		invitationEnabled: true,
+		settingValues: map[string]string{
+			service.SettingKeyRegistrationEnabled: "false",
+		},
+	})
 	ctx := context.Background()
 
 	session, err := client.PendingAuthSession.Create().
@@ -987,7 +1007,7 @@ func TestCompleteOIDCOAuthRegistrationDirectlyCreatesFromChoiceWithoutInvitation
 		SetProviderType("oidc").
 		SetProviderKey("https://issuer.example.com").
 		SetProviderSubject("oidc-direct-create-subject").
-		SetResolvedEmail("oidc-direct-create-subject@oidc-connect.invalid").
+		SetResolvedEmail(oidcSyntheticEmailFromIdentityKey(oidcIdentityKey("https://issuer.example.com", "oidc-direct-create-subject"))).
 		SetBrowserSessionKey("oidc-direct-create-browser").
 		SetUpstreamIdentityClaims(map[string]any{
 			"username": "oidc_direct_user",
@@ -1184,7 +1204,20 @@ func newOIDCOAuthTestHandler(t *testing.T, invitationEnabled bool, oauthCfg conf
 
 func newOIDCOAuthHandlerAndClient(t *testing.T, invitationEnabled bool, oauthCfg config.OIDCConnectConfig) (*AuthHandler, *dbent.Client) {
 	t.Helper()
-	handler, client := newOAuthPendingFlowTestHandler(t, invitationEnabled)
+	return newOIDCOAuthHandlerAndClientWithSettings(t, invitationEnabled, nil, oauthCfg)
+}
+
+func newOIDCOAuthHandlerAndClientWithSettings(
+	t *testing.T,
+	invitationEnabled bool,
+	settingValues map[string]string,
+	oauthCfg config.OIDCConnectConfig,
+) (*AuthHandler, *dbent.Client) {
+	t.Helper()
+	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		invitationEnabled: invitationEnabled,
+		settingValues:     settingValues,
+	})
 	handler.settingSvc = nil
 	handler.cfg = &config.Config{
 		JWT: config.JWTConfig{

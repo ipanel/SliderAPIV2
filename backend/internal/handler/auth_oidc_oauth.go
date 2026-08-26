@@ -684,23 +684,51 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 	if affiliateCode == "" {
 		affiliateCode = pendingSessionStringValue(session.UpstreamIdentityClaims, "aff_code")
 	}
-	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
-		c.Request.Context(),
-		email,
-		username,
-		req.InvitationCode,
-		affiliateCode,
-		pendingOAuthPromoCode(session),
-	)
+	var tokenPair *service.TokenPair
+	var user *service.User
+	created := false
+	if req.CreateAccount {
+		emailVerified, _ := session.UpstreamIdentityClaims["email_verified"].(bool)
+		tokenPair, user, created, err = h.authService.CompletePendingOIDCOAuth(
+			c.Request.Context(),
+			service.EmailOAuthIdentityInput{
+				ProviderType:     "oidc",
+				ProviderKey:      strings.TrimSpace(session.ProviderKey),
+				ProviderSubject:  strings.TrimSpace(session.ProviderSubject),
+				Email:            pendingSessionStringValue(session.UpstreamIdentityClaims, "email"),
+				EmailVerified:    emailVerified,
+				Username:         username,
+				DisplayName:      pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_display_name"),
+				AvatarURL:        pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_avatar_url"),
+				UpstreamMetadata: session.UpstreamIdentityClaims,
+			},
+			affiliateCode,
+			pendingOAuthPromoCode(session),
+		)
+	} else {
+		tokenPair, user, err = h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
+			c.Request.Context(),
+			email,
+			username,
+			req.InvitationCode,
+			affiliateCode,
+			pendingOAuthPromoCode(session),
+		)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	if err := applyPendingOAuthAdoptionAndConsumeSession(c.Request.Context(), client, h.authService, h.userService, session, decision, user.ID); err != nil {
+		if created {
+			_ = h.authService.RollbackOAuthEmailAccountCreation(c.Request.Context(), user.ID, "")
+		}
 		respondPendingOAuthBindingApplyError(c, err)
 		return
 	}
-	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	if !req.CreateAccount {
+		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
+	}
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
 
@@ -1187,7 +1215,7 @@ func containsString(values []string, target string) bool {
 }
 
 func oidcIdentityKey(issuer, subject string) string {
-	issuer = strings.TrimSpace(strings.ToLower(issuer))
+	issuer = strings.TrimSpace(issuer)
 	subject = strings.TrimSpace(subject)
 	return issuer + "\x1f" + subject
 }

@@ -653,6 +653,11 @@ func (h *AuthHandler) findOAuthIdentityUser(ctx context.Context, identity servic
 		}
 		return nil, infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
 	}
+	if record.ProviderType != strings.TrimSpace(identity.ProviderType) ||
+		record.ProviderKey != strings.TrimSpace(identity.ProviderKey) ||
+		record.ProviderSubject != strings.TrimSpace(identity.ProviderSubject) {
+		return nil, infraerrors.Conflict("AUTH_IDENTITY_KEY_COLLISION", "auth identity key conflicts with another canonical identity")
+	}
 	return findActiveUserByID(ctx, client, record.UserID)
 }
 

@@ -49,6 +49,12 @@ func (s *AuthService) LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(
 	return s.loginOrRegisterVerifiedEmailOAuth(ctx, input, invitationCode, affiliateCode, promoCode)
 }
 
+type emailOAuthRegistrationPolicy struct {
+	ignoreRegistrationDisabled  bool
+	ignoreInvitationRequirement bool
+	recoverSyntheticAccount     bool
+}
+
 func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	ctx context.Context,
 	input EmailOAuthIdentityInput,
@@ -72,12 +78,55 @@ func (s *AuthService) CompletePendingEmailOAuthWithSignupCodes(
 	return s.loginOrRegisterVerifiedEmailOAuthDetailed(ctx, input, invitationCode, affiliateCode, promoCode)
 }
 
+// CompletePendingOIDCOAuth creates or signs in an OIDC-backed account without
+// applying the local email registration switch or invitation-code requirement.
+func (s *AuthService) CompletePendingOIDCOAuth(
+	ctx context.Context,
+	input EmailOAuthIdentityInput,
+	affiliateCode string,
+	promoCode string,
+) (*TokenPair, *User, bool, error) {
+	if normalizeOAuthSignupSource(input.ProviderType) != "oidc" {
+		return nil, nil, false, infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
+	}
+	return s.loginOrRegisterVerifiedEmailOAuthDetailedWithPolicy(
+		ctx,
+		input,
+		"",
+		affiliateCode,
+		promoCode,
+		emailOAuthRegistrationPolicy{
+			ignoreRegistrationDisabled:  true,
+			ignoreInvitationRequirement: true,
+			recoverSyntheticAccount:     true,
+		},
+	)
+}
+
 func (s *AuthService) loginOrRegisterVerifiedEmailOAuthDetailed(
 	ctx context.Context,
 	input EmailOAuthIdentityInput,
 	invitationCode string,
 	affiliateCode string,
 	promoCode string,
+) (*TokenPair, *User, bool, error) {
+	return s.loginOrRegisterVerifiedEmailOAuthDetailedWithPolicy(
+		ctx,
+		input,
+		invitationCode,
+		affiliateCode,
+		promoCode,
+		emailOAuthRegistrationPolicy{},
+	)
+}
+
+func (s *AuthService) loginOrRegisterVerifiedEmailOAuthDetailedWithPolicy(
+	ctx context.Context,
+	input EmailOAuthIdentityInput,
+	invitationCode string,
+	affiliateCode string,
+	promoCode string,
+	registrationPolicy emailOAuthRegistrationPolicy,
 ) (*TokenPair, *User, bool, error) {
 	if s == nil || s.userRepo == nil || s.entClient == nil {
 		return nil, nil, false, ErrServiceUnavailable
@@ -107,12 +156,29 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuthDetailed(
 	}
 	user := identityUser
 	created := false
-	if user == nil {
-		user, err = s.createEmailOAuthUser(ctx, email, input.Username, providerType, invitationCode, affiliateCode)
+	recoveredSyntheticAccount := false
+	if user == nil && registrationPolicy.recoverSyntheticAccount {
+		user, err = s.findRecoverableOAuthSyntheticAccount(ctx, email, providerType)
 		if err != nil {
 			return nil, nil, false, err
 		}
-		created = true
+		recoveredSyntheticAccount = user != nil
+	}
+	if user == nil {
+		user, err = s.createEmailOAuthUser(ctx, email, input.Username, providerType, invitationCode, affiliateCode, registrationPolicy)
+		if err == nil {
+			created = true
+		} else if registrationPolicy.recoverSyntheticAccount && infraerrors.Reason(err) == "OAUTH_SYNTHETIC_EMAIL_CONFLICT" {
+			recoveredUser, recoverErr := s.findRecoverableOAuthSyntheticAccount(ctx, email, providerType)
+			if recoverErr == nil && recoveredUser != nil {
+				user = recoveredUser
+				recoveredSyntheticAccount = true
+				err = nil
+			}
+		}
+		if err != nil {
+			return nil, nil, false, err
+		}
 	}
 
 	if !user.IsActive() {
@@ -146,12 +212,12 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuthDetailed(
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to update username after %s oauth login: %v", providerType, err)
 		}
 	}
-	if !created {
+	if created {
+		user = s.applyOAuthSignupPromoCode(ctx, user, promoCode)
+	} else if !recoveredSyntheticAccount {
 		if err := s.ApplyProviderDefaultSettingsOnFirstBind(ctx, user.ID, providerType); err != nil {
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to apply %s first bind defaults: %v", providerType, err)
 		}
-	} else {
-		user = s.applyOAuthSignupPromoCode(ctx, user, promoCode)
 	}
 	s.RecordSuccessfulLogin(ctx, user.ID)
 
@@ -210,7 +276,7 @@ func OAuthSyntheticEmail(providerType, providerKey, providerSubject string) (str
 	case "wechat":
 		return "wechat-" + providerSubject + WeChatConnectSyntheticEmailDomain, nil
 	case "oidc":
-		identityKey := strings.ToLower(providerKey) + "\x1f" + providerSubject
+		identityKey := providerKey + "\x1f" + providerSubject
 		return hashedOAuthSyntheticEmail("oidc", identityKey, OIDCConnectSyntheticEmailDomain), nil
 	case "github":
 		return hashedOAuthSyntheticEmail("github", providerKey+"\x1f"+providerSubject, GitHubConnectSyntheticEmailDomain), nil
@@ -234,16 +300,28 @@ func cloneOAuthMetadata(metadata map[string]any) map[string]any {
 	return cloned
 }
 
-func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string) (*User, error) {
-	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
+func (s *AuthService) createEmailOAuthUser(
+	ctx context.Context,
+	email string,
+	username string,
+	providerType string,
+	invitationCode string,
+	affiliateCode string,
+	registrationPolicy emailOAuthRegistrationPolicy,
+) (*User, error) {
+	if !registrationPolicy.ignoreRegistrationDisabled && (s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx)) {
 		return nil, ErrRegDisabled
 	}
-	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
-	if err != nil {
-		if errors.Is(err, ErrInvitationCodeRequired) {
-			return nil, ErrOAuthInvitationRequired
+	var invitationRedeemCode *RedeemCode
+	if !registrationPolicy.ignoreInvitationRequirement {
+		var err error
+		invitationRedeemCode, err = s.validateOAuthRegistrationInvitation(ctx, invitationCode)
+		if err != nil {
+			if errors.Is(err, ErrInvitationCodeRequired) {
+				return nil, ErrOAuthInvitationRequired
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	randomPassword, err := randomHexString(32)
@@ -288,6 +366,27 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 	return user, nil
 }
 
+func (s *AuthService) findRecoverableOAuthSyntheticAccount(ctx context.Context, email, providerType string) (*User, error) {
+	user, err := s.userRepo.GetByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, nil
+		}
+		return nil, ErrServiceUnavailable
+	}
+
+	actualSource := strings.TrimSpace(user.SignupSource)
+	if actualSource == "" {
+		actualSource = inferLegacySignupSource(user.Email)
+	} else {
+		actualSource = normalizeOAuthSignupSource(actualSource)
+	}
+	if actualSource != oauthSignupStorageSource(providerType) || !strings.EqualFold(strings.TrimSpace(user.Email), strings.TrimSpace(email)) {
+		return nil, infraerrors.Conflict("OAUTH_SYNTHETIC_EMAIL_CONFLICT", "oauth account identity is already reserved")
+	}
+	return user, nil
+}
+
 func (s *AuthService) findEmailOAuthIdentityOwner(ctx context.Context, providerType, providerKey, providerSubject string) (*User, error) {
 	identity, err := s.entClient.AuthIdentity.Query().
 		Where(
@@ -301,6 +400,9 @@ func (s *AuthService) findEmailOAuthIdentityOwner(ctx context.Context, providerT
 			return nil, nil
 		}
 		return nil, infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
+	}
+	if identity.ProviderType != providerType || identity.ProviderKey != providerKey || identity.ProviderSubject != providerSubject {
+		return nil, infraerrors.Conflict("AUTH_IDENTITY_KEY_COLLISION", "auth identity key conflicts with another canonical identity")
 	}
 	user, err := s.userRepo.GetByID(ctx, identity.UserID)
 	if err != nil {
@@ -343,21 +445,44 @@ func (s *AuthService) ensureEmailOAuthIdentity(ctx context.Context, userID int64
 	if err != nil && !dbent.IsNotFound(err) {
 		return infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
 	}
-	if identity != nil {
-		if identity.UserID != userID {
-			return infraerrors.Conflict("AUTH_IDENTITY_OWNERSHIP_CONFLICT", "auth identity already belongs to another user")
-		}
-		_, err = s.entClient.AuthIdentity.UpdateOneID(identity.ID).
+	if dbent.IsNotFound(err) {
+		err = s.entClient.AuthIdentity.Create().
+			SetUserID(userID).
+			SetProviderType(providerType).
+			SetProviderKey(providerKey).
+			SetProviderSubject(providerSubject).
 			SetMetadata(metadata).
-			Save(ctx)
-		return err
+			OnConflictColumns(
+				authidentity.FieldProviderType,
+				authidentity.FieldProviderKey,
+				authidentity.FieldProviderSubject,
+			).
+			DoNothing().
+			Exec(ctx)
+		if err != nil && !isSQLNoRowsError(err) {
+			return infraerrors.InternalServer("AUTH_IDENTITY_CREATE_FAILED", "failed to create auth identity").WithCause(err)
+		}
+		identity, err = s.entClient.AuthIdentity.Query().
+			Where(
+				authidentity.ProviderTypeEQ(providerType),
+				authidentity.ProviderKeyEQ(providerKey),
+				authidentity.ProviderSubjectEQ(providerSubject),
+			).
+			Only(ctx)
+		if err != nil {
+			return infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
+		}
 	}
-	_, err = s.entClient.AuthIdentity.Create().
-		SetUserID(userID).
-		SetProviderType(providerType).
-		SetProviderKey(providerKey).
-		SetProviderSubject(providerSubject).
+	if identity.ProviderType != providerType || identity.ProviderKey != providerKey || identity.ProviderSubject != providerSubject {
+		return infraerrors.Conflict("AUTH_IDENTITY_KEY_COLLISION", "auth identity key conflicts with another canonical identity")
+	}
+	if identity.UserID != userID {
+		return infraerrors.Conflict("AUTH_IDENTITY_OWNERSHIP_CONFLICT", "auth identity already belongs to another user")
+	}
+	if _, err := s.entClient.AuthIdentity.UpdateOneID(identity.ID).
 		SetMetadata(metadata).
-		Save(ctx)
-	return err
+		Save(ctx); err != nil {
+		return infraerrors.InternalServer("AUTH_IDENTITY_UPDATE_FAILED", "failed to update auth identity").WithCause(err)
+	}
+	return nil
 }

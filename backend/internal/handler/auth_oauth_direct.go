@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"ikik-api/internal/service"
@@ -23,13 +24,26 @@ func (h *AuthHandler) completeDirectOAuthIdentityLogin(
 		return err
 	}
 
-	tokenPair, user, created, err := h.authService.CompletePendingEmailOAuthWithSignupCodes(
-		c.Request.Context(),
-		input,
-		"",
-		readOAuthAffiliateCode(c),
-		readOAuthPromoCode(c),
-	)
+	var tokenPair *service.TokenPair
+	var user *service.User
+	var created bool
+	var err error
+	if strings.EqualFold(strings.TrimSpace(input.ProviderType), "oidc") {
+		tokenPair, user, created, err = h.authService.CompletePendingOIDCOAuth(
+			c.Request.Context(),
+			input,
+			readOAuthAffiliateCode(c),
+			readOAuthPromoCode(c),
+		)
+	} else {
+		tokenPair, user, created, err = h.authService.CompletePendingEmailOAuthWithSignupCodes(
+			c.Request.Context(),
+			input,
+			"",
+			readOAuthAffiliateCode(c),
+			readOAuthPromoCode(c),
+		)
+	}
 	if err != nil {
 		return err
 	}
