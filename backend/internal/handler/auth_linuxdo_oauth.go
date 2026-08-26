@@ -113,6 +113,7 @@ func (h *AuthHandler) LinuxDoOAuthStart(c *gin.Context) {
 	setCookie(c, linuxDoOAuthIntentCookieName, encodeCookieValue(intent), linuxDoOAuthCookieMaxAgeSec, secureCookie)
 	setOAuthLoginAgreementCookie(c, loginAgreementRevision, secureCookie)
 	captureOAuthPromoCode(c, secureCookie)
+	captureOAuthAffiliateCode(c, secureCookie)
 	setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	if intent == oauthIntentBindCurrentUser {
@@ -187,6 +188,7 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		clearCookie(c, linuxDoOAuthBindUserCookieName, secureCookie)
 		clearOAuthLoginAgreementCookie(c, secureCookie)
 		clearOAuthPromoCodeCookie(c, secureCookie)
+		clearOAuthAffiliateCodeCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, linuxDoOAuthStateCookieName)
@@ -325,31 +327,28 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	compatEmailUser, err := h.findLinuxDoCompatEmailUser(c.Request.Context(), compatEmail)
+	err = h.completeDirectOAuthIdentityLogin(c, frontendCallback, redirectTo, service.EmailOAuthIdentityInput{
+		ProviderType:     identityKey.ProviderType,
+		ProviderKey:      identityKey.ProviderKey,
+		ProviderSubject:  identityKey.ProviderSubject,
+		Email:            compatEmail,
+		EmailVerified:    false,
+		Username:         username,
+		DisplayName:      displayName,
+		AvatarURL:        avatarURL,
+		UpstreamMetadata: upstreamClaims,
+	}, nil)
+	if errors.Is(err, service.ErrOAuthInvitationRequired) {
+		if pendingErr := h.createOAuthInvitationPendingSession(c, identityKey, email, redirectTo, browserSessionKey, loginAgreementRevision, upstreamClaims); pendingErr != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth registration", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
 	if err != nil {
-		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
-		return
+		redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
 	}
-	emailVerificationRequired := h != nil && h.authService != nil && h.authService.IsEmailVerifyEnabled(c.Request.Context())
-	forceEmailOnSignup := h.isForceEmailOnThirdPartySignup(c.Request.Context())
-	if err := h.createLinuxDoOAuthChoicePendingSession(
-		c,
-		identityKey,
-		email,
-		email,
-		redirectTo,
-		browserSessionKey,
-		loginAgreementRevision,
-		upstreamClaims,
-		compatEmail,
-		compatEmailUser,
-		emailVerificationRequired,
-		forceEmailOnSignup,
-	); err != nil {
-		redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
-		return
-	}
-	redirectToFrontendCallback(c, frontendCallback)
 }
 
 func (h *AuthHandler) findLinuxDoCompatEmailUser(ctx context.Context, email string) (*dbent.User, error) {
@@ -550,12 +549,16 @@ func (h *AuthHandler) CompleteLinuxDoOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	affiliateCode := strings.TrimSpace(req.AffCode)
+	if affiliateCode == "" {
+		affiliateCode = pendingSessionStringValue(session.UpstreamIdentityClaims, "aff_code")
+	}
 	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
 		c.Request.Context(),
 		email,
 		username,
 		req.InvitationCode,
-		req.AffCode,
+		affiliateCode,
 		pendingOAuthPromoCode(session),
 	)
 	if err != nil {

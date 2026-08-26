@@ -140,7 +140,7 @@
                   <button
                     class="btn btn-primary w-full"
                     :disabled="isSubmitting"
-                    @click="switchToCreateAccountMode"
+                    @click="handleChooseCreateAccount"
                   >
                     {{ t('auth.oauthFlow.createNewAccount') }}
                   </button>
@@ -298,6 +298,7 @@ const bindLoginPassword = ref('')
 const legacyPendingOAuthToken = ref('')
 const accountActionError = ref('')
 const canReturnToCreateAccount = ref(false)
+const forceEmailOnSignup = ref(false)
 const bindSuccessMessage = t('profile.authBindings.bindSuccess')
 const needsTotpChallenge = ref(false)
 const totpTempToken = ref('')
@@ -341,6 +342,7 @@ type PendingOidcCompletion = PendingOAuthExchangeResponse & {
   email?: string
   suggested_email?: string
   provider_fallback?: string
+  force_email_on_signup?: boolean
   intent?: string
   requires_2fa?: boolean
   temp_token?: string
@@ -499,6 +501,7 @@ function resolvePendingAccountAction(
 function applyPendingAccountAction(completion: PendingOidcCompletion) {
   const action = resolvePendingAccountAction(completion)
   pendingAccountAction.value = action
+  forceEmailOnSignup.value = completion.force_email_on_signup === true
   accountActionError.value = ''
   needsTotpChallenge.value = false
   totpTempToken.value = ''
@@ -693,6 +696,30 @@ async function handleContinueLogin() {
   }
 }
 
+async function handleChooseCreateAccount() {
+  if (forceEmailOnSignup.value) {
+    switchToCreateAccountMode()
+    return
+  }
+
+  accountActionError.value = ''
+  isSubmitting.value = true
+  try {
+    const { data } = await apiClient.post<PendingOidcCompletion>('/auth/oauth/oidc/complete-registration', {
+      create_account: true,
+      ...(legacyPendingOAuthToken.value
+        ? { pending_oauth_token: legacyPendingOAuthToken.value }
+        : {}),
+      ...oauthAffiliatePayload(loadOAuthAffiliateCode()),
+      ...serializeAdoptionDecision(currentAdoptionDecision())
+    })
+    await finalizePendingAccountResponse(data)
+  } catch (e: unknown) {
+    accountActionError.value = getRequestErrorMessage(e, t('auth.oidc.completeRegistrationFailed'))
+  } finally {
+    isSubmitting.value = false
+  }
+}
 async function handleCreateAccount(payload: PendingOAuthCreateAccountPayload) {
   accountActionError.value = ''
   if (!payload.email || !payload.password) return

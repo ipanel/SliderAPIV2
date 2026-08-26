@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	dbent "ikik-api/ent"
 	"ikik-api/ent/authidentity"
 	"ikik-api/ent/identityadoptiondecision"
@@ -18,8 +20,6 @@ import (
 	"ikik-api/internal/config"
 	servermiddleware "ikik-api/internal/server/middleware"
 	"ikik-api/internal/service"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSanitizeFrontendRedirectPath(t *testing.T) {
@@ -197,7 +197,7 @@ func TestLinuxDoOAuthStartOmitsPKCEWhenDisabled(t *testing.T) {
 	require.Nil(t, findCookie(recorder.Result().Cookies(), linuxDoOAuthVerifierCookie))
 }
 
-func TestLinuxDoOAuthCallbackAllowsMissingVerifierWhenPKCEDisabled(t *testing.T) {
+func TestLinuxDoOAuthCallbackDirectLoginAllowsMissingVerifierWhenPKCEDisabled(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
@@ -241,8 +241,28 @@ func TestLinuxDoOAuthCallbackAllowsMissingVerifierWhenPKCEDisabled(t *testing.T)
 	handler.LinuxDoOAuthCallback(c)
 
 	require.Equal(t, http.StatusFound, recorder.Code)
-	require.Equal(t, "/auth/linuxdo/callback", recorder.Header().Get("Location"))
-	require.NotNil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, "/auth/linuxdo/callback", location.Path)
+	fragment, err := url.ParseQuery(location.Fragment)
+	require.NoError(t, err)
+	require.NotEmpty(t, fragment.Get("access_token"))
+	require.NotEmpty(t, fragment.Get("refresh_token"))
+	require.Equal(t, "/dashboard", fragment.Get("redirect"))
+
+	ctx := context.Background()
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+	createdUser, err := client.User.Query().Where(dbuser.EmailEQ(linuxDoSyntheticEmail("compat-subject"))).Only(ctx)
+	require.NoError(t, err)
+	identity, err := client.AuthIdentity.Query().Where(
+		authidentity.ProviderTypeEQ("linuxdo"),
+		authidentity.ProviderKeyEQ("linuxdo"),
+		authidentity.ProviderSubjectEQ("compat-subject"),
+	).Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, createdUser.ID, identity.UserID)
 }
 
 func TestLinuxDoOAuthBindStartAcceptsAccessTokenCookie(t *testing.T) {
@@ -476,7 +496,7 @@ func TestLinuxDoOAuthCallbackRejectsDisabledExistingIdentityUser(t *testing.T) {
 	require.Zero(t, count)
 }
 
-func TestLinuxDoOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing.T) {
+func TestLinuxDoOAuthCallbackDoesNotBindCompatEmailUserAndCreatesSyntheticAccount(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
@@ -522,41 +542,39 @@ func TestLinuxDoOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *test
 	req.AddCookie(encodedCookie(linuxDoOAuthStateCookieName, "state-compat"))
 	req.AddCookie(encodedCookie(linuxDoOAuthRedirectCookie, "/dashboard"))
 	req.AddCookie(encodedCookie(linuxDoOAuthVerifierCookie, "verifier-compat"))
-	req.AddCookie(encodedCookie(linuxDoOAuthIntentCookieName, oauthIntentLogin))
 	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-compat"))
 	c.Request = req
 
 	handler.LinuxDoOAuthCallback(c)
 
 	require.Equal(t, http.StatusFound, recorder.Code)
-	require.Equal(t, "/auth/linuxdo/callback", recorder.Header().Get("Location"))
-
-	sessionCookie := findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName)
-	require.NotNil(t, sessionCookie)
-
-	session, err := client.PendingAuthSession.Query().
-		Where(pendingauthsession.SessionTokenEQ(decodeCookieValueForTest(t, sessionCookie.Value))).
-		Only(ctx)
+	location, err := url.Parse(recorder.Header().Get("Location"))
 	require.NoError(t, err)
-	require.Equal(t, oauthIntentLogin, session.Intent)
-	require.NotNil(t, session.TargetUserID)
-	require.Equal(t, existingUser.ID, *session.TargetUserID)
-	require.Equal(t, strings.TrimSpace(existingUser.Email), session.ResolvedEmail)
-	require.Equal(t, "legacy@example.com", session.UpstreamIdentityClaims["compat_email"])
+	fragment, err := url.ParseQuery(location.Fragment)
+	require.NoError(t, err)
+	require.NotEmpty(t, fragment.Get("access_token"))
+	require.Equal(t, "/dashboard", fragment.Get("redirect"))
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
 
-	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "/dashboard", completion["redirect"])
-	require.Equal(t, oauthPendingChoiceStep, completion["step"])
-	require.Equal(t, strings.TrimSpace(existingUser.Email), completion["email"])
-	require.Equal(t, strings.TrimSpace(existingUser.Email), completion["existing_account_email"])
-	require.Equal(t, true, completion["existing_account_bindable"])
-	require.Equal(t, "compat_email_match", completion["choice_reason"])
-	_, hasAccessToken := completion["access_token"]
-	require.False(t, hasAccessToken)
+	createdUser, err := client.User.Query().Where(dbuser.EmailEQ(linuxDoSyntheticEmail("321"))).Only(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, existingUser.ID, createdUser.ID)
+	identity, err := client.AuthIdentity.Query().Where(
+		authidentity.ProviderTypeEQ("linuxdo"),
+		authidentity.ProviderKeyEQ("linuxdo"),
+		authidentity.ProviderSubjectEQ("321"),
+	).Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, createdUser.ID, identity.UserID)
+	require.NotEqual(t, existingUser.ID, identity.UserID)
+	userCount, err := client.User.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, userCount)
 }
 
-func TestLinuxDoOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t *testing.T) {
+func TestLinuxDoOAuthCallbackCreatesInvitationRequiredPendingSessionWhenSignupRequiresInvite(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
@@ -611,12 +629,19 @@ func TestLinuxDoOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite
 	require.NoError(t, err)
 	require.Equal(t, oauthIntentLogin, session.Intent)
 	require.Nil(t, session.TargetUserID)
+	require.Equal(t, linuxDoSyntheticEmail("654"), session.ResolvedEmail)
 
 	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, oauthPendingChoiceStep, completion["step"])
+	require.Equal(t, "invitation_required", completion["error"])
+	require.Equal(t, true, completion["invitation_required"])
 	require.Equal(t, "/dashboard", completion["redirect"])
-	require.Equal(t, "third_party_signup", completion["choice_reason"])
+	require.NotContains(t, completion, "step")
+	require.NotContains(t, completion, "email")
+	require.NotContains(t, completion, "existing_account_email")
+	userCount, err := client.User.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, userCount)
 }
 
 func TestLinuxDoOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {

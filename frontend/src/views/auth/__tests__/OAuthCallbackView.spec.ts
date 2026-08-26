@@ -186,18 +186,24 @@ describe('OAuthCallbackView', () => {
 
     const wrapper = mount(OAuthCallbackView)
     await vi.dynamicImportSettled()
-    const passwordInputs = wrapper.findAll('input[type="password"]')
-    await passwordInputs[0].setValue('secret-123')
-    await passwordInputs[1].setValue('secret-123')
+
+    expect(wrapper.find('input[type="email"]').exists()).toBe(false)
+    expect(wrapper.find('input[type="password"]').exists()).toBe(false)
+
+    const submitButton = wrapper.find('button')
+    expect(submitButton.attributes('disabled')).toBeDefined()
+    expect(apiPostMock).not.toHaveBeenCalled()
+
     const invitationInput = wrapper.find('input[type="text"]')
     await invitationInput.setValue('INVITE456')
-    await wrapper.findAll('button').at(0)?.trigger('click')
+    expect(submitButton.attributes('disabled')).toBeUndefined()
+    await submitButton.trigger('click')
 
     expect(apiPostMock).toHaveBeenCalledWith('/auth/oauth/google/complete-registration', {
-      password: 'secret-123',
       invitation_code: 'INVITE456',
       aff_code: 'AFF456'
     })
+    expect(apiPostMock.mock.calls[0][1]).not.toHaveProperty('password')
     expect(setTokenMock).toHaveBeenCalledWith('token-1')
   })
 

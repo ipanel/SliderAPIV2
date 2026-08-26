@@ -33,6 +33,7 @@ const (
 	oauthPendingSessionCookieName = "oauth_pending_session"
 	oauthLoginAgreementCookieName = "oauth_login_agreement_revision"
 	oauthPromoCodeCookieName      = "oauth_promo_code"
+	oauthAffiliateCodeCookieName  = "oauth_affiliate_code"
 	oauthPendingCookieMaxAgeSec   = 10 * 60
 	oauthPendingChoiceStep        = "choose_account_action_required"
 
@@ -245,6 +246,46 @@ func readOAuthPromoCode(c *gin.Context) string {
 	return strings.TrimSpace(promoCode)
 }
 
+func captureOAuthAffiliateCode(c *gin.Context, secure bool) {
+	affiliateCode := strings.TrimSpace(firstNonEmpty(c.Query("aff_code"), c.Query("aff")))
+	if affiliateCode == "" {
+		clearOAuthAffiliateCodeCookie(c, secure)
+		return
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthAffiliateCodeCookieName,
+		Value:    encodeCookieValue(affiliateCode),
+		Path:     oauthPendingBrowserCookiePath,
+		MaxAge:   oauthPendingCookieMaxAgeSec,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearOAuthAffiliateCodeCookie(c *gin.Context, secure bool) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthAffiliateCodeCookieName,
+		Value:    "",
+		Path:     oauthPendingBrowserCookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func readOAuthAffiliateCode(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	affiliateCode, err := readCookieDecoded(c, oauthAffiliateCodeCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(affiliateCode)
+}
+
 func pendingOAuthPromoCode(session *dbent.PendingAuthSession) string {
 	if session == nil || len(session.LocalFlowState) == 0 {
 		return ""
@@ -266,6 +307,35 @@ func redirectToFrontendCallback(c *gin.Context, frontendCallback string) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("Pragma", "no-cache")
 	c.Redirect(http.StatusFound, u.String())
+}
+
+func (h *AuthHandler) createOAuthInvitationPendingSession(
+	c *gin.Context,
+	identity service.PendingAuthIdentityKey,
+	resolvedEmail string,
+	redirectTo string,
+	browserSessionKey string,
+	loginAgreementRevision string,
+	upstreamClaims map[string]any,
+) error {
+	claims := clonePendingMap(upstreamClaims)
+	if affiliateCode := readOAuthAffiliateCode(c); affiliateCode != "" {
+		claims["aff_code"] = affiliateCode
+	}
+	return h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+		Intent:                 oauthIntentLogin,
+		Identity:               identity,
+		ResolvedEmail:          resolvedEmail,
+		RedirectTo:             redirectTo,
+		BrowserSessionKey:      browserSessionKey,
+		LoginAgreementRevision: loginAgreementRevision,
+		UpstreamIdentityClaims: claims,
+		CompletionResponse: map[string]any{
+			"error":               "invitation_required",
+			"invitation_required": true,
+			"redirect":            strings.TrimSpace(redirectTo),
+		},
+	})
 }
 
 func (h *AuthHandler) createOAuthPendingSession(c *gin.Context, payload oauthPendingSessionPayload) error {
@@ -468,6 +538,9 @@ func (h *AuthHandler) legacyCompleteRegistrationSessionStatus(
 	}
 
 	payload := normalizePendingOAuthCompletionResponse(mergePendingCompletionResponse(session, nil))
+	if pendingSessionWantsInvitation(payload) {
+		return session, false, nil
+	}
 	if step := pendingSessionStringValue(payload, "step"); step != "" {
 		return session, true, nil
 	}

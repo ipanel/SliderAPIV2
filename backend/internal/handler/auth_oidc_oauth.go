@@ -146,6 +146,7 @@ func (h *AuthHandler) OIDCOAuthStart(c *gin.Context) {
 	oidcSetCookie(c, oidcOAuthIntentCookieName, encodeCookieValue(intent), oidcOAuthCookieMaxAgeSec, secureCookie)
 	setOAuthLoginAgreementCookie(c, loginAgreementRevision, secureCookie)
 	captureOAuthPromoCode(c, secureCookie)
+	captureOAuthAffiliateCode(c, secureCookie)
 	setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	if intent == oauthIntentBindCurrentUser {
@@ -231,6 +232,7 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		oidcClearCookie(c, oidcOAuthBindUserCookieName, secureCookie)
 		clearOAuthLoginAgreementCookie(c, secureCookie)
 		clearOAuthPromoCodeCookie(c, secureCookie)
+		clearOAuthAffiliateCodeCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, oidcOAuthStateCookieName)
@@ -449,57 +451,29 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	compatEmailUser, err := h.findOIDCCompatEmailUser(c.Request.Context(), compatEmail)
-	if err != nil {
-		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
-		return
-	}
-
-	if cfg.RequireEmailVerified {
-		if emailVerified == nil || !*emailVerified {
-			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
-			return
-		}
-	}
-
-	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
-		if err := h.createOIDCOAuthChoicePendingSession(
-			c,
-			identityRef,
-			email,
-			email,
-			redirectTo,
-			browserSessionKey,
-			loginAgreementRevision,
-			upstreamClaims,
-			compatEmail,
-			compatEmailUser,
-			true,
-		); err != nil {
-			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+	emailIsVerified := emailVerified != nil && *emailVerified
+	err = h.completeDirectOAuthIdentityLogin(c, frontendCallback, redirectTo, service.EmailOAuthIdentityInput{
+		ProviderType:     identityRef.ProviderType,
+		ProviderKey:      identityRef.ProviderKey,
+		ProviderSubject:  identityRef.ProviderSubject,
+		Email:            compatEmail,
+		EmailVerified:    emailIsVerified,
+		Username:         username,
+		DisplayName:      pendingSessionStringValue(upstreamClaims, "suggested_display_name"),
+		AvatarURL:        pendingSessionStringValue(upstreamClaims, "suggested_avatar_url"),
+		UpstreamMetadata: upstreamClaims,
+	}, nil)
+	if errors.Is(err, service.ErrOAuthInvitationRequired) {
+		if pendingErr := h.createOAuthInvitationPendingSession(c, identityRef, email, redirectTo, browserSessionKey, loginAgreementRevision, upstreamClaims); pendingErr != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth registration", "")
 			return
 		}
 		redirectToFrontendCallback(c, frontendCallback)
 		return
 	}
-
-	if err := h.createOIDCOAuthChoicePendingSession(
-		c,
-		identityRef,
-		email,
-		email,
-		redirectTo,
-		browserSessionKey,
-		loginAgreementRevision,
-		upstreamClaims,
-		compatEmail,
-		compatEmailUser,
-		h.isForceEmailOnThirdPartySignup(c.Request.Context()),
-	); err != nil {
-		redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
-		return
+	if err != nil {
+		redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
 	}
-	redirectToFrontendCallback(c, frontendCallback)
 }
 
 func (h *AuthHandler) findOIDCCompatEmailUser(ctx context.Context, email string) (*dbent.User, error) {
@@ -593,11 +567,29 @@ func (h *AuthHandler) createOIDCOAuthChoicePendingSession(
 }
 
 type completeOIDCOAuthRequest struct {
-	InvitationCode         string `json:"invitation_code" binding:"required"`
+	InvitationCode         string `json:"invitation_code,omitempty"`
 	AffCode                string `json:"aff_code,omitempty"`
+	CreateAccount          bool   `json:"create_account,omitempty"`
 	AdoptDisplayName       *bool  `json:"adopt_display_name,omitempty"`
 	AdoptAvatar            *bool  `json:"adopt_avatar,omitempty"`
 	LoginAgreementRevision string `json:"login_agreement_revision,omitempty"`
+}
+
+func (h *AuthHandler) ensurePendingOIDCDirectAccountCreationAllowed(ctx context.Context, session *dbent.PendingAuthSession) error {
+	payload := normalizePendingOAuthCompletionResponse(mergePendingCompletionResponse(session, nil))
+	if !strings.EqualFold(pendingSessionStringValue(payload, "step"), oauthPendingChoiceStep) {
+		return infraerrors.BadRequest("PENDING_AUTH_DIRECT_CREATE_NOT_ALLOWED", "pending oauth session does not allow direct account creation")
+	}
+	if forceEmail, ok := payload["force_email_on_signup"].(bool); ok && forceEmail {
+		return infraerrors.BadRequest("PENDING_AUTH_DIRECT_CREATE_NOT_ALLOWED", "email is required for this oauth registration")
+	}
+	if allowed, ok := payload["create_account_allowed"].(bool); ok && !allowed {
+		return infraerrors.BadRequest("PENDING_AUTH_DIRECT_CREATE_NOT_ALLOWED", "pending oauth session does not allow account creation")
+	}
+	if h.isForceEmailOnThirdPartySignup(ctx) {
+		return infraerrors.BadRequest("PENDING_AUTH_DIRECT_CREATE_NOT_ALLOWED", "email is required for this oauth registration")
+	}
+	return nil
 }
 
 // CompleteOIDCOAuthRegistration completes a pending OAuth registration by validating
@@ -641,7 +633,12 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if updatedSession, handled, err := h.legacyCompleteRegistrationSessionStatus(c, session); err != nil {
+	if req.CreateAccount {
+		if err := h.ensurePendingOIDCDirectAccountCreationAllowed(c.Request.Context(), session); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	} else if updatedSession, handled, err := h.legacyCompleteRegistrationSessionStatus(c, session); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	} else if handled {
@@ -683,12 +680,16 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	affiliateCode := strings.TrimSpace(req.AffCode)
+	if affiliateCode == "" {
+		affiliateCode = pendingSessionStringValue(session.UpstreamIdentityClaims, "aff_code")
+	}
 	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
 		c.Request.Context(),
 		email,
 		username,
 		req.InvitationCode,
-		req.AffCode,
+		affiliateCode,
 		pendingOAuthPromoCode(session),
 	)
 	if err != nil {

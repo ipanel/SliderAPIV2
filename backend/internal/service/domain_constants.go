@@ -110,6 +110,8 @@ const (
 const LinuxDoConnectSyntheticEmailDomain = "@linuxdo-connect.invalid"
 const OIDCConnectSyntheticEmailDomain = "@oidc-connect.invalid"
 const WeChatConnectSyntheticEmailDomain = "@wechat-connect.invalid"
+const GitHubConnectSyntheticEmailDomain = "@github-connect.invalid"
+const GoogleConnectSyntheticEmailDomain = "@google-connect.invalid"
 
 // Setting keys
 const (

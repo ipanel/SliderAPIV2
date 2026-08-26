@@ -129,6 +129,7 @@ func (h *AuthHandler) WeChatOAuthStart(c *gin.Context) {
 	wechatSetCookie(c, wechatOAuthModeCookieName, encodeCookieValue(cfg.mode), wechatOAuthCookieMaxAgeSec, secureCookie)
 	setOAuthLoginAgreementCookie(c, loginAgreementRevision, secureCookie)
 	captureOAuthPromoCode(c, secureCookie)
+	captureOAuthAffiliateCode(c, secureCookie)
 	setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	if intent == oauthIntentBindCurrentUser {
@@ -177,6 +178,7 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		wechatClearCookie(c, wechatOAuthBindUserCookieName, secureCookie)
 		clearOAuthLoginAgreementCookie(c, secureCookie)
 		clearOAuthPromoCodeCookie(c, secureCookie)
+		clearOAuthAffiliateCodeCookie(c, secureCookie)
 	}()
 
 	expectedState, err := readCookieDecoded(c, wechatOAuthStateCookieName)
@@ -294,44 +296,30 @@ func (h *AuthHandler) WeChatOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
-		if err := h.createWeChatChoicePendingSession(
-			c,
-			identityRef,
-			email,
-			email,
-			redirectTo,
-			browserSessionKey,
-			loginAgreementRevision,
-			upstreamClaims,
-			"",
-			nil,
-			true,
-		); err != nil {
-			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+	err = h.completeDirectOAuthIdentityLogin(c, frontendCallback, redirectTo, service.EmailOAuthIdentityInput{
+		ProviderType:     identityRef.ProviderType,
+		ProviderKey:      identityRef.ProviderKey,
+		ProviderSubject:  identityRef.ProviderSubject,
+		Email:            "",
+		EmailVerified:    false,
+		Username:         username,
+		DisplayName:      strings.TrimSpace(userInfo.Nickname),
+		AvatarURL:        strings.TrimSpace(userInfo.HeadImgURL),
+		UpstreamMetadata: upstreamClaims,
+	}, func(user *service.User) error {
+		return h.ensureWeChatRuntimeIdentityBinding(c.Request.Context(), user.ID, identityRef, upstreamClaims)
+	})
+	if errors.Is(err, service.ErrOAuthInvitationRequired) {
+		if pendingErr := h.createOAuthInvitationPendingSession(c, identityRef, email, redirectTo, browserSessionKey, loginAgreementRevision, upstreamClaims); pendingErr != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth registration", "")
 			return
 		}
 		redirectToFrontendCallback(c, frontendCallback)
 		return
 	}
-
-	if err := h.createWeChatChoicePendingSession(
-		c,
-		identityRef,
-		email,
-		email,
-		redirectTo,
-		browserSessionKey,
-		loginAgreementRevision,
-		upstreamClaims,
-		"",
-		nil,
-		false,
-	); err != nil {
-		redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
-		return
+	if err != nil {
+		redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
 	}
-	redirectToFrontendCallback(c, frontendCallback)
 }
 
 // WeChatPaymentOAuthStart starts the WeChat payment OAuth flow.
@@ -570,12 +558,16 @@ func (h *AuthHandler) CompleteWeChatOAuthRegistration(c *gin.Context) {
 		return
 	}
 
+	affiliateCode := strings.TrimSpace(req.AffCode)
+	if affiliateCode == "" {
+		affiliateCode = pendingSessionStringValue(session.UpstreamIdentityClaims, "aff_code")
+	}
 	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
 		c.Request.Context(),
 		email,
 		username,
 		req.InvitationCode,
-		req.AffCode,
+		affiliateCode,
 		pendingOAuthPromoCode(session),
 	)
 	if err != nil {

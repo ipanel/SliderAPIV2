@@ -124,6 +124,52 @@
           @open="showAgreementModal = true"
         />
       </form>
+
+      <div v-if="showOAuthLogin" class="space-y-3">
+        <div class="flex items-center gap-3">
+          <div class="h-px flex-1 bg-gray-200 dark:bg-dark-700"></div>
+          <span class="text-xs text-gray-500 dark:text-dark-400">
+            {{ t('auth.oauthOrContinue') }}
+          </span>
+          <div class="h-px flex-1 bg-gray-200 dark:bg-dark-700"></div>
+        </div>
+
+        <EmailOAuthButtons
+          :disabled="submitDisabled"
+          :aff-code="formData.aff_code"
+          :github-enabled="githubOAuthEnabled"
+          :google-enabled="googleOAuthEnabled"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
+          :show-divider="false"
+        />
+
+        <LinuxDoOAuthSection
+          v-if="linuxdoOAuthEnabled"
+          :disabled="submitDisabled"
+          :aff-code="formData.aff_code"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
+          :show-divider="false"
+        />
+        <WechatOAuthSection
+          v-if="wechatOAuthEnabled"
+          :disabled="submitDisabled"
+          :aff-code="formData.aff_code"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
+          :show-divider="false"
+        />
+        <OidcOAuthSection
+          v-if="oidcOAuthEnabled"
+          :disabled="submitDisabled"
+          :provider-name="oidcOAuthProviderName"
+          :aff-code="formData.aff_code"
+          :login-agreement-revision="loginAgreementRevision"
+          :before-start="validateAgreementBeforeOAuth"
+          :show-divider="false"
+        />
+      </div>
     </div>
 
     <!-- Footer -->
@@ -153,18 +199,22 @@
 
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
+import LinuxDoOAuthSection from '@/components/auth/LinuxDoOAuthSection.vue'
+import OidcOAuthSection from '@/components/auth/OidcOAuthSection.vue'
+import WechatOAuthSection from '@/components/auth/WechatOAuthSection.vue'
+import EmailOAuthButtons from '@/components/auth/EmailOAuthButtons.vue'
 import LoginAgreementPrompt from '@/components/auth/LoginAgreementPrompt.vue'
 import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
 import Icon from '@/components/icons/Icon.vue'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import { useAuthStore, useAppStore } from '@/stores'
-import { getPublicSettings, isTotp2FARequired } from '@/api/auth'
-import type { LoginAgreementDocument, TotpLoginResponse } from '@/types'
+import { isTotp2FARequired, isWeChatWebOAuthEnabled } from '@/api/auth'
+import type { LoginAgreementDocument, PublicSettings, TotpLoginResponse } from '@/types'
 import { extractI18nErrorMessage } from '@/utils/apiError'
-import { clearAllAffiliateReferralCodes } from '@/utils/oauthAffiliate'
+import { clearAllAffiliateReferralCodes, resolveAffiliateReferralCode } from '@/utils/oauthAffiliate'
 
 const { t } = useI18n()
 const LOGIN_AGREEMENT_STORAGE_KEY = 'ikik-api_login_agreement_consent'
@@ -172,6 +222,7 @@ const LOGIN_AGREEMENT_STORAGE_KEY = 'ikik-api_login_agreement_consent'
 // ==================== Router & Stores ====================
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const appStore = useAppStore()
 
@@ -187,6 +238,12 @@ const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
 const backendModeEnabled = ref<boolean>(false)
 const passwordResetEnabled = ref<boolean>(false)
+const linuxdoOAuthEnabled = ref<boolean>(false)
+const wechatOAuthEnabled = ref<boolean>(false)
+const oidcOAuthEnabled = ref<boolean>(false)
+const oidcOAuthProviderName = ref<string>('OIDC')
+const githubOAuthEnabled = ref<boolean>(false)
+const googleOAuthEnabled = ref<boolean>(false)
 const loginAgreementEnabled = ref<boolean>(false)
 const loginAgreementMode = ref<'modal' | 'checkbox' | string>('modal')
 const loginAgreementUpdatedAt = ref<string>('')
@@ -208,7 +265,8 @@ const totpModalRef = ref<InstanceType<typeof TotpLoginModal> | null>(null)
 
 const formData = reactive({
   email: '',
-  password: ''
+  password: '',
+  aff_code: ''
 })
 
 const errors = reactive({
@@ -219,6 +277,15 @@ const errors = reactive({
 
 const validationToastMessage = computed(
   () => errors.email || errors.password || errors.turnstile || ''
+)
+
+const showOAuthLogin = computed(
+  () =>
+    linuxdoOAuthEnabled.value ||
+    wechatOAuthEnabled.value ||
+    oidcOAuthEnabled.value ||
+    githubOAuthEnabled.value ||
+    googleOAuthEnabled.value
 )
 
 const agreementGateActive = computed(
@@ -235,6 +302,35 @@ watch(validationToastMessage, (value, previousValue) => {
   }
 })
 
+// ==================== Public Settings ====================
+
+function syncAffiliateReferralCode(): string {
+  const code = resolveAffiliateReferralCode(route.query.aff, route.query.aff_code)
+  if (code) {
+    formData.aff_code = code
+  }
+  return code
+}
+
+function applyPublicSettings(settings: PublicSettings): void {
+  turnstileEnabled.value = settings.turnstile_enabled
+  turnstileSiteKey.value = settings.turnstile_site_key || ''
+  backendModeEnabled.value = settings.backend_mode_enabled
+  passwordResetEnabled.value = settings.password_reset_enabled
+  linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
+  wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
+  oidcOAuthEnabled.value = settings.oidc_oauth_enabled
+  oidcOAuthProviderName.value = settings.oidc_oauth_provider_name || 'OIDC'
+  githubOAuthEnabled.value = Boolean(settings.github_oauth_enabled)
+  googleOAuthEnabled.value = Boolean(settings.google_oauth_enabled)
+  applyLoginAgreementSettings(settings)
+}
+
+if (appStore.cachedPublicSettings) {
+  applyPublicSettings(appStore.cachedPublicSettings)
+  publicSettingsLoaded.value = true
+}
+
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
@@ -246,13 +342,13 @@ onMounted(async () => {
     appStore.showWarning(message)
   }
 
+  syncAffiliateReferralCode()
+
   try {
-    const settings = await getPublicSettings()
-    turnstileEnabled.value = settings.turnstile_enabled
-    turnstileSiteKey.value = settings.turnstile_site_key || ''
-    backendModeEnabled.value = settings.backend_mode_enabled
-    passwordResetEnabled.value = settings.password_reset_enabled
-    applyLoginAgreementSettings(settings)
+    const settings = await appStore.fetchPublicSettings()
+    if (settings) {
+      applyPublicSettings(settings)
+    }
   } catch (error) {
     console.error('Failed to load public settings:', error)
     loginAgreementEnabled.value = false
@@ -261,6 +357,13 @@ onMounted(async () => {
     publicSettingsLoaded.value = true
   }
 })
+
+watch(
+  () => [route.query.aff, route.query.aff_code],
+  () => {
+    syncAffiliateReferralCode()
+  }
+)
 
 // ==================== Login Agreement ====================
 
@@ -337,6 +440,10 @@ function validateAgreementBeforeSubmit(): boolean {
     showAgreementModal.value = true
   }
   return false
+}
+
+function validateAgreementBeforeOAuth(): boolean {
+  return validateAgreementBeforeSubmit()
 }
 
 // ==================== Turnstile Handlers ====================

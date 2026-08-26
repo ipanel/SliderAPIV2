@@ -428,6 +428,65 @@ describe('OidcCallbackView', () => {
     expect(replace).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('auth.oauthFlow.bindExistingAccount')
     expect(wrapper.text()).toContain('auth.oauthFlow.createNewAccount')
+
+    const createAccountButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'auth.oauthFlow.createNewAccount')
+    expect(createAccountButton).toBeDefined()
+    await createAccountButton!.trigger('click')
+
+    expect(wrapper.find('[data-testid="oidc-create-account-email"]').exists()).toBe(true)
+    expect(apiClientPost).not.toHaveBeenCalled()
+  })
+
+  it('creates an OIDC account directly from the chooser when email signup is not forced', async () => {
+    exchangePendingOAuthCompletion.mockResolvedValue({
+      auth_result: 'pending_session',
+      step: 'choose_account_action_required',
+      redirect: '/dashboard',
+      force_email_on_signup: false,
+      adoption_required: true,
+      suggested_display_name: 'OIDC Nick',
+      suggested_avatar_url: 'https://cdn.example/oidc.png'
+    })
+    apiClientPost.mockResolvedValue({
+      data: {
+        access_token: 'direct-access-token',
+        refresh_token: 'direct-refresh-token',
+        expires_in: 3600,
+        token_type: 'Bearer'
+      }
+    })
+    setToken.mockResolvedValue({})
+
+    const wrapper = mount(OidcCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const createAccountButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'auth.oauthFlow.createNewAccount')
+    expect(createAccountButton).toBeDefined()
+    await createAccountButton!.trigger('click')
+    await flushPromises()
+
+    expect(apiClientPost).toHaveBeenCalledWith('/auth/oauth/oidc/complete-registration', {
+      create_account: true,
+      adopt_display_name: true,
+      adopt_avatar: true
+    })
+    expect(wrapper.find('[data-testid="oidc-create-account-email"]').exists()).toBe(false)
+    expect(setToken).toHaveBeenCalledWith('direct-access-token')
+    expect(replace).toHaveBeenCalledWith('/dashboard')
   })
 
   it('collects email, password, and verify code for pending oauth account creation and submits adoption decisions', async () => {

@@ -2,9 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/mail"
 	"strings"
 
 	dbent "ikik-api/ent"
@@ -55,13 +56,36 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	affiliateCode string,
 	promoCode string,
 ) (*TokenPair, *User, error) {
+	tokenPair, user, _, err := s.loginOrRegisterVerifiedEmailOAuthDetailed(ctx, input, invitationCode, affiliateCode, promoCode)
+	return tokenPair, user, err
+}
+
+// CompletePendingEmailOAuthWithSignupCodes completes an invitation-gated
+// GitHub/Google registration without asking for a local email or password.
+func (s *AuthService) CompletePendingEmailOAuthWithSignupCodes(
+	ctx context.Context,
+	input EmailOAuthIdentityInput,
+	invitationCode string,
+	affiliateCode string,
+	promoCode string,
+) (*TokenPair, *User, bool, error) {
+	return s.loginOrRegisterVerifiedEmailOAuthDetailed(ctx, input, invitationCode, affiliateCode, promoCode)
+}
+
+func (s *AuthService) loginOrRegisterVerifiedEmailOAuthDetailed(
+	ctx context.Context,
+	input EmailOAuthIdentityInput,
+	invitationCode string,
+	affiliateCode string,
+	promoCode string,
+) (*TokenPair, *User, bool, error) {
 	if s == nil || s.userRepo == nil || s.entClient == nil {
-		return nil, nil, ErrServiceUnavailable
+		return nil, nil, false, ErrServiceUnavailable
 	}
 
 	providerType := normalizeOAuthSignupSource(input.ProviderType)
-	if providerType != "github" && providerType != "google" {
-		return nil, nil, infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
+	if !isSupportedOAuthIdentityProvider(providerType) {
+		return nil, nil, false, infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
 	}
 	providerKey := strings.TrimSpace(input.ProviderKey)
 	if providerKey == "" {
@@ -69,57 +93,38 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	}
 	providerSubject := strings.TrimSpace(input.ProviderSubject)
 	if providerSubject == "" {
-		return nil, nil, infraerrors.BadRequest("OAUTH_SUBJECT_MISSING", "oauth subject is missing")
+		return nil, nil, false, infraerrors.BadRequest("OAUTH_SUBJECT_MISSING", "oauth subject is missing")
 	}
-	if !input.EmailVerified {
-		return nil, nil, infraerrors.Forbidden("OAUTH_EMAIL_NOT_VERIFIED", "oauth email is not verified")
-	}
-
-	email := strings.TrimSpace(strings.ToLower(input.Email))
-	if email == "" || len(email) > 255 {
-		return nil, nil, infraerrors.BadRequest("INVALID_EMAIL", "invalid email")
-	}
-	if _, err := mail.ParseAddress(email); err != nil {
-		return nil, nil, infraerrors.BadRequest("INVALID_EMAIL", "invalid email")
-	}
-	if isReservedEmail(email) {
-		return nil, nil, ErrEmailReserved
-	}
-	if err := s.validateRegistrationEmailPolicy(ctx, email); err != nil {
-		return nil, nil, err
-	}
-
-	identityUser, err := s.findEmailOAuthIdentityOwner(ctx, providerType, providerKey, providerSubject)
+	email, err := OAuthSyntheticEmail(providerType, providerKey, providerSubject)
 	if err != nil {
-		return nil, nil, err
-	}
-	if identityUser != nil && !strings.EqualFold(strings.TrimSpace(identityUser.Email), email) {
-		return nil, nil, infraerrors.Conflict("AUTH_IDENTITY_EMAIL_MISMATCH", "oauth identity belongs to a different email")
+		return nil, nil, false, err
 	}
 
+	identityProviderType := oauthIdentityStorageProviderType(providerType)
+	identityUser, err := s.findEmailOAuthIdentityOwner(ctx, identityProviderType, providerKey, providerSubject)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	user := identityUser
 	created := false
 	if user == nil {
-		user, err = s.userRepo.GetByEmail(ctx, email)
+		user, err = s.createEmailOAuthUser(ctx, email, input.Username, providerType, invitationCode, affiliateCode)
 		if err != nil {
-			if errors.Is(err, ErrUserNotFound) {
-				user, err = s.createEmailOAuthUser(ctx, email, input.Username, providerType, invitationCode, affiliateCode)
-				if err != nil {
-					return nil, nil, err
-				}
-				created = true
-			} else {
-				logger.LegacyPrintf("service.auth", "[Auth] Database error during %s oauth login: %v", providerType, err)
-				return nil, nil, ErrServiceUnavailable
-			}
+			return nil, nil, false, err
 		}
+		created = true
 	}
 
 	if !user.IsActive() {
-		return nil, nil, ErrUserNotActive
+		return nil, nil, false, ErrUserNotActive
+	}
+	metadata := cloneOAuthMetadata(input.UpstreamMetadata)
+	upstreamEmail := strings.TrimSpace(strings.ToLower(input.Email))
+	if upstreamEmail != "" && !strings.EqualFold(upstreamEmail, email) {
+		metadata["upstream_email"] = upstreamEmail
 	}
 	if err := s.ensureEmailOAuthIdentity(ctx, user.ID, EmailOAuthIdentityInput{
-		ProviderType:     providerType,
+		ProviderType:     identityProviderType,
 		ProviderKey:      providerKey,
 		ProviderSubject:  providerSubject,
 		Email:            email,
@@ -127,9 +132,12 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 		Username:         input.Username,
 		DisplayName:      input.DisplayName,
 		AvatarURL:        input.AvatarURL,
-		UpstreamMetadata: input.UpstreamMetadata,
+		UpstreamMetadata: metadata,
 	}); err != nil {
-		return nil, nil, err
+		if created {
+			_ = s.RollbackOAuthEmailAccountCreation(ctx, user.ID, invitationCode)
+		}
+		return nil, nil, false, err
 	}
 
 	if user.Username == "" && strings.TrimSpace(input.Username) != "" {
@@ -149,9 +157,81 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 
 	tokenPair, err := s.GenerateTokenPair(ctx, user, "")
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate token pair: %w", err)
+		if created {
+			_ = s.RollbackOAuthEmailAccountCreation(ctx, user.ID, invitationCode)
+		}
+		return nil, nil, false, fmt.Errorf("generate token pair: %w", err)
 	}
-	return tokenPair, user, nil
+	return tokenPair, user, created, nil
+}
+
+func oauthIdentityStorageProviderType(providerType string) string {
+	switch normalizeOAuthSignupSource(providerType) {
+	case "github", "google":
+		return "oidc"
+	default:
+		return normalizeOAuthSignupSource(providerType)
+	}
+}
+
+func oauthSignupStorageSource(providerType string) string {
+	return oauthIdentityStorageProviderType(providerType)
+}
+
+func isSupportedOAuthIdentityProvider(providerType string) bool {
+	switch providerType {
+	case "github", "google", "linuxdo", "oidc", "wechat":
+		return true
+	default:
+		return false
+	}
+}
+
+// OAuthSyntheticEmail returns a stable, provider-scoped placeholder address.
+// It is an internal account key only; upstream email claims are metadata and are
+// never used to discover or adopt an existing local account.
+func OAuthSyntheticEmail(providerType, providerKey, providerSubject string) (string, error) {
+	providerType = normalizeOAuthSignupSource(providerType)
+	if !isSupportedOAuthIdentityProvider(providerType) {
+		return "", infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
+	}
+	providerKey = strings.TrimSpace(providerKey)
+	if providerKey == "" {
+		providerKey = providerType
+	}
+	providerSubject = strings.TrimSpace(providerSubject)
+	if providerSubject == "" {
+		return "", infraerrors.BadRequest("OAUTH_SUBJECT_MISSING", "oauth subject is missing")
+	}
+
+	switch providerType {
+	case "linuxdo":
+		return "linuxdo-" + providerSubject + LinuxDoConnectSyntheticEmailDomain, nil
+	case "wechat":
+		return "wechat-" + providerSubject + WeChatConnectSyntheticEmailDomain, nil
+	case "oidc":
+		identityKey := strings.ToLower(providerKey) + "\x1f" + providerSubject
+		return hashedOAuthSyntheticEmail("oidc", identityKey, OIDCConnectSyntheticEmailDomain), nil
+	case "github":
+		return hashedOAuthSyntheticEmail("github", providerKey+"\x1f"+providerSubject, GitHubConnectSyntheticEmailDomain), nil
+	case "google":
+		return hashedOAuthSyntheticEmail("google", providerKey+"\x1f"+providerSubject, GoogleConnectSyntheticEmailDomain), nil
+	default:
+		return "", infraerrors.BadRequest("OAUTH_PROVIDER_INVALID", "oauth provider is invalid")
+	}
+}
+
+func hashedOAuthSyntheticEmail(prefix, identityKey, domain string) string {
+	sum := sha256.Sum256([]byte(identityKey))
+	return prefix + "-" + hex.EncodeToString(sum[:16]) + domain
+}
+
+func cloneOAuthMetadata(metadata map[string]any) map[string]any {
+	cloned := make(map[string]any, len(metadata)+1)
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string) (*User, error) {
@@ -188,19 +268,15 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 		Concurrency:  grantPlan.Concurrency,
 		RPMLimit:     defaultRPMLimit,
 		Status:       StatusActive,
-		SignupSource: providerType,
+		SignupSource: oauthSignupStorageSource(providerType),
 	}
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		if errors.Is(err, ErrEmailExists) {
-			existing, loadErr := s.userRepo.GetByEmail(ctx, email)
-			if loadErr != nil {
-				return nil, ErrServiceUnavailable
-			}
-			return existing, nil
+			return nil, infraerrors.Conflict("OAUTH_SYNTHETIC_EMAIL_CONFLICT", "oauth account identity is already reserved")
 		}
 		return nil, ErrServiceUnavailable
 	}
-	s.postAuthUserBootstrap(ctx, user, providerType, false)
+	s.postAuthUserBootstrap(ctx, user, oauthSignupStorageSource(providerType), false)
 	s.assignSubscriptions(ctx, user.ID, grantPlan.Subscriptions, "auto assigned by signup defaults")
 	s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
 	if invitationRedeemCode != nil {

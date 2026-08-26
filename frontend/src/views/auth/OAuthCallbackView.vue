@@ -20,40 +20,42 @@
         </p>
 
         <div class="mt-6 space-y-4">
-          <div>
-            <label class="input-label">{{ t('auth.emailLabel') }}</label>
-            <input
-              class="input w-full"
-              type="email"
-              :value="registrationEmail"
-              readonly
-              disabled
-            />
-          </div>
-          <div>
-            <label class="input-label">{{ t('auth.passwordLabel') }}</label>
-            <input
-              v-model="password"
-              type="password"
-              class="input w-full"
-              :placeholder="t('auth.createPasswordPlaceholder')"
-              :disabled="isSubmitting"
-              autocomplete="new-password"
-              @keyup.enter="handleSubmitRegistration"
-            />
-          </div>
-          <div>
-            <label class="input-label">{{ t('auth.confirmPassword') }}</label>
-            <input
-              v-model="confirmPassword"
-              type="password"
-              class="input w-full"
-              :placeholder="t('auth.confirmPasswordPlaceholder')"
-              :disabled="isSubmitting"
-              autocomplete="new-password"
-              @keyup.enter="handleSubmitRegistration"
-            />
-          </div>
+          <template v-if="requiresRegistrationCredentials">
+            <div>
+              <label class="input-label">{{ t('auth.emailLabel') }}</label>
+              <input
+                class="input w-full"
+                type="email"
+                :value="registrationEmail"
+                readonly
+                disabled
+              />
+            </div>
+            <div>
+              <label class="input-label">{{ t('auth.passwordLabel') }}</label>
+              <input
+                v-model="password"
+                type="password"
+                class="input w-full"
+                :placeholder="t('auth.createPasswordPlaceholder')"
+                :disabled="isSubmitting"
+                autocomplete="new-password"
+                @keyup.enter="handleSubmitRegistration"
+              />
+            </div>
+            <div>
+              <label class="input-label">{{ t('auth.confirmPassword') }}</label>
+              <input
+                v-model="confirmPassword"
+                type="password"
+                class="input w-full"
+                :placeholder="t('auth.confirmPasswordPlaceholder')"
+                :disabled="isSubmitting"
+                autocomplete="new-password"
+                @keyup.enter="handleSubmitRegistration"
+              />
+            </div>
+          </template>
           <div v-if="invitationRequired">
             <label class="input-label">{{ t('auth.invitationCodeLabel') }}</label>
             <input
@@ -173,6 +175,7 @@ const isProcessing = ref(false)
 const isSubmitting = ref(false)
 const needsRegistrationCompletion = ref(false)
 const invitationRequired = ref(false)
+const requiresRegistrationCredentials = ref(false)
 const registrationEmail = ref('')
 const password = ref('')
 const confirmPassword = ref('')
@@ -209,11 +212,11 @@ const registrationHint = computed(() =>
     : t('auth.oidc.completeRegistration')
 )
 const canSubmitRegistration = computed(() => {
+  if (invitationRequired.value && !invitationCode.value.trim()) return false
+  if (!requiresRegistrationCredentials.value) return true
   if (!registrationEmail.value.trim()) return false
   if (password.value.length < 6) return false
-  if (password.value !== confirmPassword.value) return false
-  if (invitationRequired.value && !invitationCode.value.trim()) return false
-  return true
+  return password.value === confirmPassword.value
 })
 
 function parseFragmentParams(): URLSearchParams {
@@ -303,7 +306,10 @@ async function resumePendingEmailOAuth() {
 
     if (completion.error === 'invitation_required' || completion.error === 'registration_completion_required') {
       invitationRequired.value = completion.error === 'invitation_required' || completion.invitation_required === true
-      registrationEmail.value = String(completion.resolved_email || completion.email || '').trim()
+      requiresRegistrationCredentials.value = completion.error === 'registration_completion_required'
+      registrationEmail.value = requiresRegistrationCredentials.value
+        ? String(completion.resolved_email || completion.email || '').trim()
+        : ''
       needsRegistrationCompletion.value = true
       isProcessing.value = false
       return
@@ -324,26 +330,30 @@ async function resumePendingEmailOAuth() {
 
 async function handleSubmitRegistration() {
   registrationError.value = ''
-  if (!registrationEmail.value.trim()) {
-    registrationError.value = t('auth.emailRequired')
-    return
-  }
-  if (password.value.length < 6) {
-    registrationError.value = t('auth.passwordMinLength')
-    return
-  }
-  if (password.value !== confirmPassword.value) {
-    registrationError.value = t('auth.passwordsDoNotMatch')
-    return
+  if (requiresRegistrationCredentials.value) {
+    if (!registrationEmail.value.trim()) {
+      registrationError.value = t('auth.emailRequired')
+      return
+    }
+    if (password.value.length < 6) {
+      registrationError.value = t('auth.passwordMinLength')
+      return
+    }
+    if (password.value !== confirmPassword.value) {
+      registrationError.value = t('auth.passwordsDoNotMatch')
+      return
+    }
   }
   const code = invitationCode.value.trim()
   if (invitationRequired.value && !code) return
 
   isSubmitting.value = true
   try {
-    const payload: { password: string; invitation_code?: string; aff_code?: string } = {
-      password: password.value,
+    const payload: { password?: string; invitation_code?: string; aff_code?: string } = {
       ...oauthAffiliatePayload(loadOAuthAffiliateCode())
+    }
+    if (requiresRegistrationCredentials.value) {
+      payload.password = password.value
     }
     if (invitationRequired.value) {
       payload.invitation_code = code
