@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import ModelProbeModal from '../ModelProbeModal.vue'
-import { adminAPI } from '@/api/admin'
+import { accountsAPI } from '@/api/accounts'
 
 const discoveredModelCount = 25
 
@@ -11,12 +11,10 @@ const { probeModelListMock, probeModelsMock } = vi.hoisted(() => ({
   probeModelsMock: vi.fn()
 }))
 
-vi.mock('@/api/admin', () => ({
-  adminAPI: {
-    accounts: {
-      probeModelList: probeModelListMock,
-      probeModels: probeModelsMock
-    }
+vi.mock('@/api/accounts', () => ({
+  accountsAPI: {
+    probeModelList: probeModelListMock,
+    probeModels: probeModelsMock
   }
 }))
 
@@ -80,7 +78,7 @@ describe('ModelProbeModal', () => {
     await findButton(wrapper, 'admin.accounts.modelProbe.discover').trigger('click')
     await flushPromises()
 
-    expect(adminAPI.accounts.probeModelList).toHaveBeenCalledWith({
+    expect(accountsAPI.probeModelList).toHaveBeenCalledWith({
       platform: 'openai',
       base_url: '',
       api_key: 'sk-test'
@@ -90,7 +88,7 @@ describe('ModelProbeModal', () => {
     await findButton(wrapper, 'admin.accounts.modelProbe.testSelected').trigger('click')
     await flushPromises()
 
-    expect(adminAPI.accounts.probeModels).toHaveBeenCalledWith({
+    expect(accountsAPI.probeModels).toHaveBeenCalledWith({
       platform: 'openai',
       base_url: '',
       api_key: 'sk-test',
@@ -163,7 +161,7 @@ describe('ModelProbeModal', () => {
     await findButton(wrapper, 'admin.accounts.modelProbe.testSelected').trigger('click')
     await flushPromises()
 
-    expect(adminAPI.accounts.probeModels).toHaveBeenCalledWith({
+    expect(accountsAPI.probeModels).toHaveBeenCalledWith({
       platform: 'openai',
       base_url: '',
       api_key: 'sk-test',

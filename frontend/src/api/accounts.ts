@@ -9,6 +9,40 @@ import type { KiroIDCAuthUrlResponse, KiroTokenInfo } from '@/api/admin/kiro'
 
 const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
 
+export interface ModelProbeModel {
+  id: string
+  object?: string
+  display_name?: string
+  owned_by?: string
+}
+
+export interface ModelProbeListRequest {
+  platform: string
+  base_url?: string
+  api_key: string
+}
+
+export interface ModelProbeListResult {
+  models: ModelProbeModel[]
+}
+
+export interface ModelProbeTestRequest extends ModelProbeListRequest {
+  mode?: string
+  models: string[]
+}
+
+export interface ModelProbeSingleResult {
+  model: string
+  mode: string
+  ok: boolean
+  status?: number
+  error?: string
+}
+
+export interface ModelProbeTestResult {
+  results: ModelProbeSingleResult[]
+}
+
 export interface UserAccountListFilters {
   platform?: string
   type?: string
@@ -35,6 +69,18 @@ export async function list(
     },
     signal: options?.signal
   })
+  return data
+}
+
+// Discover upstream models with credentials supplied by the current user.
+export async function probeModelList(payload: ModelProbeListRequest): Promise<ModelProbeListResult> {
+  const { data } = await apiClient.post<ModelProbeListResult>('/accounts/model-probe/list', payload, { timeout: 45000 })
+  return data
+}
+
+// Validate selected upstream models with credentials supplied by the current user.
+export async function probeModels(payload: ModelProbeTestRequest): Promise<ModelProbeTestResult> {
+  const { data } = await apiClient.post<ModelProbeTestResult>('/accounts/model-probe/test', payload, { timeout: 90000 })
   return data
 }
 
@@ -655,6 +701,8 @@ export async function importKiroToken(payload: {
 
 export const accountsAPI = {
   list,
+  probeModelList,
+  probeModels,
   getById,
   getQuotaDashboard,
   create,

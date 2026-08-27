@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -264,6 +265,20 @@ type userTestAccountRequest struct {
 	ModelID string `json:"model_id"`
 	Prompt  string `json:"prompt"`
 	Mode    string `json:"mode"`
+}
+
+type userModelProbeListRequest struct {
+	Platform string `json:"platform" binding:"required"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key" binding:"required"`
+}
+
+type userModelProbeTestRequest struct {
+	Platform string   `json:"platform" binding:"required"`
+	BaseURL  string   `json:"base_url"`
+	APIKey   string   `json:"api_key" binding:"required"`
+	Mode     string   `json:"mode"`
+	Models   []string `json:"models" binding:"required"`
 }
 
 type createUserPrivateProxyRequest struct {
@@ -1499,6 +1514,66 @@ func (h *UserAccountHandler) BulkDelete(c *gin.Context) {
 	result, err := h.accountService.BulkDeleteOwned(c.Request.Context(), subject.UserID, accountIDs)
 	if err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+// ProbeModelList discovers upstream models using credentials supplied by the authenticated user.
+// POST /api/v1/accounts/model-probe/list
+func (h *UserAccountHandler) ProbeModelList(c *gin.Context) {
+	if !requireUserAccountAuth(c) {
+		return
+	}
+	if h.accountTestService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service unavailable")
+		return
+	}
+
+	var req userModelProbeListRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	result, err := h.accountTestService.ProbeModelList(c.Request.Context(), service.ModelProbeListInput{
+		Platform: req.Platform,
+		BaseURL:  req.BaseURL,
+		APIKey:   req.APIKey,
+	})
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, result)
+}
+
+// ProbeModels validates selected models using credentials supplied by the authenticated user.
+// POST /api/v1/accounts/model-probe/test
+func (h *UserAccountHandler) ProbeModels(c *gin.Context) {
+	if !requireUserAccountAuth(c) {
+		return
+	}
+	if h.accountTestService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service unavailable")
+		return
+	}
+
+	var req userModelProbeTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	result, err := h.accountTestService.ProbeModels(c.Request.Context(), service.ModelProbeTestInput{
+		Platform: req.Platform,
+		BaseURL:  req.BaseURL,
+		APIKey:   req.APIKey,
+		Mode:     req.Mode,
+		Models:   req.Models,
+	})
+	if err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 	response.Success(c, result)

@@ -113,6 +113,8 @@ func RegisterUserRoutes(
 			accounts.GET("/quota-dashboard", h.UserAccount.GetQuotaPoolDashboard)
 			accounts.GET("/data", h.UserAccount.ExportData)
 			accounts.POST("/today-stats/batch", h.UserAccount.GetBatchTodayStats)
+			accounts.POST("/model-probe/list", h.UserAccount.ProbeModelList)
+			accounts.POST("/model-probe/test", h.UserAccount.ProbeModels)
 			accounts.GET("/:id/usage", h.UserAccount.GetUsage)
 			accounts.GET("/:id/stats", h.UserAccount.GetStats)
 			accounts.GET("/:id/today-stats", h.UserAccount.GetTodayStats)

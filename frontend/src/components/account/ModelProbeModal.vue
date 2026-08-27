@@ -203,9 +203,9 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
-import { adminAPI } from '@/api/admin'
+import { accountsAPI } from '@/api/accounts'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import type { ModelProbeModel, ModelProbeSingleResult } from '@/api/admin/accounts'
+import type { ModelProbeModel, ModelProbeSingleResult } from '@/api/accounts'
 
 const { t } = useI18n()
 
@@ -350,7 +350,7 @@ const discoverModels = async () => {
   lastError.value = ''
   testResults.value = []
   try {
-    const result = await adminAPI.accounts.probeModelList({
+    const result = await accountsAPI.probeModelList({
       platform: platform.value,
       base_url: baseUrl.value.trim(),
       api_key: apiKey.value.trim()
@@ -373,7 +373,7 @@ const testSelectedModels = async () => {
   testing.value = true
   lastError.value = ''
   try {
-    const result = await adminAPI.accounts.probeModels({
+    const result = await accountsAPI.probeModels({
       platform: platform.value,
       base_url: baseUrl.value.trim(),
       api_key: apiKey.value.trim(),
