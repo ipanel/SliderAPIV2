@@ -3229,26 +3229,31 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     headerOverrideRows.value = []
   }
   if (isUserScope.value) {
-    if (newAccount.platform === 'kiro') {
-      const kiroCredentials = (newAccount.credentials as Record<string, unknown>) || {}
-      const existingMappings = kiroCredentials.model_mapping as Record<string, string> | undefined
-      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
-        const entries = Object.entries(existingMappings)
-        const isWhitelistMode = entries.every(([from, to]) => from === to)
-        if (isWhitelistMode) {
-          modelRestrictionMode.value = 'whitelist'
-          allowedModels.value = entries.map(([from]) => from)
-          modelMappings.value = []
-        } else {
-          modelRestrictionMode.value = 'mapping'
-          modelMappings.value = entries.map(([from, to]) => ({ from, to }))
-          allowedModels.value = []
-        }
+    const personalCredentials = (newAccount.credentials as Record<string, unknown>) || {}
+    const rawModelMapping = personalCredentials.model_mapping
+    const hasExplicitModelMapping =
+      Object.prototype.hasOwnProperty.call(personalCredentials, 'model_mapping') &&
+      rawModelMapping !== null &&
+      typeof rawModelMapping === 'object' &&
+      !Array.isArray(rawModelMapping)
+
+    // Respect saved user selections, including an explicit empty whitelist.
+    if (hasExplicitModelMapping) {
+      const entries = Object.entries(rawModelMapping as Record<string, string>)
+      const isWhitelistMode = entries.every(([from, to]) => from === to)
+      if (isWhitelistMode) {
+        modelRestrictionMode.value = 'whitelist'
+        allowedModels.value = entries.map(([from]) => from)
+        modelMappings.value = []
       } else {
         modelRestrictionMode.value = 'mapping'
-        modelMappings.value = getKiroDefaultModelMappings()
+        modelMappings.value = entries.map(([from, to]) => ({ from, to }))
         allowedModels.value = []
       }
+    } else if (newAccount.platform === 'kiro') {
+      modelRestrictionMode.value = 'mapping'
+      modelMappings.value = getKiroDefaultModelMappings()
+      allowedModels.value = []
     } else {
       modelRestrictionMode.value = 'whitelist'
       allowedModels.value = Object.keys(buildPersonalAccountModelMapping(newAccount.platform))

@@ -156,13 +156,14 @@ function buildAccount() {
   } as any
 }
 
-function mountModal(account = buildAccount()) {
+function mountModal(account = buildAccount(), accountScope: 'admin' | 'user' = 'admin') {
   return mount(EditAccountModal, {
     props: {
       show: true,
       account,
       proxies: [],
-      groups: []
+      groups: [],
+      accountScope
     },
     global: {
       stubs: {
@@ -178,6 +179,25 @@ function mountModal(account = buildAccount()) {
 }
 
 describe('EditAccountModal', () => {
+  it('keeps an explicitly empty user whitelist empty when opening the editor', () => {
+    const account = buildAccount()
+    account.credentials.model_mapping = {}
+
+    const wrapper = mountModal(account, 'user')
+
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('')
+  })
+
+  it('shows persisted probed models for a user account instead of platform defaults', () => {
+    const account = buildAccount()
+    account.credentials.model_mapping = {
+      'upstream-probed-model': 'upstream-probed-model'
+    }
+
+    const wrapper = mountModal(account, 'user')
+
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('upstream-probed-model')
+  })
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
@@ -214,8 +234,7 @@ describe('EditAccountModal', () => {
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateUserAccountMock.mockResolvedValue(account)
 
-    const wrapper = mountModal(account)
-    await wrapper.setProps({ accountScope: 'user' })
+    const wrapper = mountModal(account, 'user')
     await wrapper.get('[data-testid="clear-all-models"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
@@ -235,8 +254,7 @@ describe('EditAccountModal', () => {
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateUserAccountMock.mockResolvedValue(account)
 
-    const wrapper = mountModal(account)
-    await wrapper.setProps({ accountScope: 'user' })
+    const wrapper = mountModal(account, 'user')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
