@@ -27,14 +27,25 @@ export function buildPersonalAccountModelMapping(platform: AccountPlatform | str
   return mapping
 }
 
+// Preserve an explicit empty mapping so personal-account defaults are not restored after clearing models.
+export function ensureExplicitPersonalAccountModelMapping(
+  credentials: Record<string, unknown>
+): Record<string, unknown> {
+  const nextCredentials = { ...credentials }
+  if (!Object.prototype.hasOwnProperty.call(nextCredentials, 'model_mapping')) {
+    nextCredentials.model_mapping = {}
+  }
+  return nextCredentials
+}
+
 export function applyPersonalAccountTemplate(
   platform: AccountPlatform | string,
   credentials: Record<string, unknown>,
   extra?: Record<string, unknown>
 ): { credentials: Record<string, unknown>; extra?: Record<string, unknown> } {
-  const nextCredentials: Record<string, unknown> = {
-    ...credentials,
-    model_mapping: buildPersonalAccountModelMapping(platform)
+  const nextCredentials: Record<string, unknown> = { ...credentials }
+  if (!Object.prototype.hasOwnProperty.call(nextCredentials, 'model_mapping')) {
+    nextCredentials.model_mapping = buildPersonalAccountModelMapping(platform)
   }
 
   const nextExtra: Record<string, unknown> = { ...(extra || {}) }

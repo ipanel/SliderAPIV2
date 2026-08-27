@@ -3580,7 +3580,8 @@ import {
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE,
   PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
   applyPersonalAccountTemplate,
-  buildPersonalAccountModelMapping
+  buildPersonalAccountModelMapping,
+  ensureExplicitPersonalAccountModelMapping
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { accountAssignableGroups } from '@/utils/accountGroups'
@@ -4747,6 +4748,9 @@ const sanitizeCreatePayload = (payload: CreateAccountRequest): CreateAccountRequ
   }
   if (isUserScope.value) {
     delete next.group_ids
+    next.credentials = ensureExplicitPersonalAccountModelMapping(
+      (next.credentials as Record<string, unknown>) || {}
+    )
     next.concurrency = PERSONAL_ACCOUNT_DEFAULT_CONCURRENCY
     next.load_factor = undefined
     next.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
@@ -5421,6 +5425,9 @@ const createAccountAndFinish = async (
   credentials: Record<string, unknown>,
   extra?: Record<string, unknown>
 ) => {
+  if (isUserScope.value) {
+    credentials = ensureExplicitPersonalAccountModelMapping(credentials)
+  }
   if (!applyTempUnschedConfig(credentials)) {
     return
   }

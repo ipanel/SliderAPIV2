@@ -2284,7 +2284,8 @@ import {
   PERSONAL_ACCOUNT_DEFAULT_OPENAI_WS_MODE,
   PERSONAL_ACCOUNT_DEFAULT_PRIORITY,
   applyPersonalAccountTemplate,
-  buildPersonalAccountModelMapping
+  buildPersonalAccountModelMapping,
+  ensureExplicitPersonalAccountModelMapping
 } from '@/components/account/personalAccountTemplate'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
@@ -3705,10 +3706,11 @@ const sanitizeUpdatePayload = (payload: Record<string, unknown>) => {
       next.priority = PERSONAL_ACCOUNT_DEFAULT_PRIORITY
     }
     next.auto_pause_on_expired = PERSONAL_ACCOUNT_DEFAULT_AUTO_PAUSE_ON_EXPIRED
-    const currentCredentials =
+    const currentCredentials = ensureExplicitPersonalAccountModelMapping(
       (next.credentials as Record<string, unknown>) ||
-      (props.account?.credentials as Record<string, unknown>) ||
-      {}
+        (props.account?.credentials as Record<string, unknown>) ||
+        {}
+    )
     const currentExtra =
       (next.extra as Record<string, unknown>) ||
       (props.account?.extra as Record<string, unknown>) ||

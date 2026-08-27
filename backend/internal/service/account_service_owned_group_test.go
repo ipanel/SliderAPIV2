@@ -939,6 +939,44 @@ func TestAccountServiceUpdateOwnedRejectsDuplicateAnthropicIdentity(t *testing.T
 	require.Empty(t, repo.updatedAccounts)
 }
 
+func TestAccountServiceUpdateOwnedPreservesExplicitEmptyModelMapping(t *testing.T) {
+	ownerID := int64(101)
+	repo := &ownedAccountDuplicateRepoStub{
+		getByIDAccounts: map[int64]*Account{
+			2: {
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				OwnerUserID: &ownerID,
+				Credentials: map[string]any{
+					"access_token": "token",
+					"model_mapping": map[string]any{
+						"gpt-5.4": "gpt-5.4",
+					},
+				},
+				ShareMode:   AccountShareModePrivate,
+				ShareStatus: AccountShareStatusApproved,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    1,
+			},
+		},
+	}
+	svc := &AccountService{accountRepo: repo}
+	credentials := map[string]any{
+		"access_token":  "token",
+		"model_mapping": map[string]any{},
+	}
+
+	account, err := svc.UpdateOwned(context.Background(), ownerID, 2, UpdateAccountRequest{Credentials: &credentials})
+
+	require.NoError(t, err)
+	require.Len(t, repo.updatedAccounts, 1)
+	require.Empty(t, account.Credentials["model_mapping"])
+	require.Empty(t, repo.updatedAccounts[0].Credentials["model_mapping"])
+}
+
 func TestAccountServiceUpdateOwnedRejectsManualAccountLevel(t *testing.T) {
 	ownerID := int64(101)
 	repo := &ownedAccountDuplicateRepoStub{}

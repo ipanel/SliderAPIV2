@@ -89,6 +89,13 @@ const ModelWhitelistSelectorStub = defineComponent({
       >
         rewrite
       </button>
+      <button
+        type="button"
+        data-testid="clear-all-models"
+        @click="$emit('update:modelValue', [])"
+      >
+        clear
+      </button>
       <span data-testid="model-whitelist-value">
         {{ Array.isArray(modelValue) ? modelValue.join(',') : '' }}
       </span>
@@ -197,6 +204,23 @@ describe('EditAccountModal', () => {
       'gpt-5.2': 'gpt-5.2'
     })
     expect(updateAccountMock.mock.calls[0]?.[1]?.account_level).toBe('plus')
+  })
+
+  it('submits an empty model_mapping when a user clears all models', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    updateUserAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateUserAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ accountScope: 'user' })
+    await wrapper.get('[data-testid="clear-all-models"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateUserAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateUserAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({})
   })
 
   it('keeps account level read-only for user-scoped account edits', async () => {
